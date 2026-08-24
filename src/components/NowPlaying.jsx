@@ -9,6 +9,51 @@ function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+const RotatingTitle = ({ text, style = {}, className = '' }) => {
+  const containerRef = useRef(null);
+  const textRef = useRef(null);
+  const [shouldRotate, setShouldRotate] = useState(false);
+
+  useEffect(() => {
+    const checkOverflow = () => {
+      if (containerRef.current && textRef.current) {
+        setShouldRotate(textRef.current.scrollWidth > containerRef.current.clientWidth);
+      }
+    };
+    checkOverflow();
+    window.addEventListener('resize', checkOverflow);
+    return () => window.removeEventListener('resize', checkOverflow);
+  }, [text]);
+
+  return (
+    <div 
+      ref={containerRef} 
+      className={className}
+      style={{ 
+        overflow: 'hidden', 
+        whiteSpace: 'nowrap', 
+        width: '100%', 
+        position: 'relative',
+        ...style 
+      }}
+    >
+      <div 
+        ref={textRef}
+        className={shouldRotate ? 'marquee-rotate' : ''}
+        style={{
+          display: 'inline-block',
+          whiteSpace: 'nowrap'
+        }}
+      >
+        <span>{text}</span>
+        {shouldRotate && (
+          <span style={{ paddingLeft: '2.5rem' }}>{text}</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const NowPlaying = () => {
   const {
     playbackState,
@@ -95,15 +140,15 @@ export const NowPlaying = () => {
     <div className="panel-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '10px 12px' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
           {isYouTube ? (
-            <Youtube size={16} style={{ color: '#ff0000' }} />
+            <Youtube size={16} style={{ color: '#ff0000', flexShrink: 0 }} />
           ) : isVideo ? (
-            <Video size={16} style={{ color: 'var(--red-ember)' }} />
+            <Video size={16} style={{ color: 'var(--red-ember)', flexShrink: 0 }} />
           ) : (
-            <Music size={16} style={{ color: 'var(--amber)' }} />
+            <Music size={16} style={{ color: 'var(--amber)', flexShrink: 0 }} />
           )}
-          <h2 style={{ fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--text)' }}>
+          <h2 style={{ fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--text)', whiteSpace: 'nowrap' }}>
             {isYouTube ? 'YOUTUBE DOCK STREAM' : 'NOW PLAYING'}
           </h2>
         </div>
@@ -112,7 +157,7 @@ export const NowPlaying = () => {
           <button 
             onClick={() => setIsFullscreen(true)}
             title="Expand Fullscreen Video"
-            style={{ padding: '3px 6px', fontSize: '0.7rem', background: 'var(--bg3)', borderColor: 'var(--border2)' }}
+            style={{ padding: '3px 6px', fontSize: '0.7rem', background: 'var(--bg3)', borderColor: 'var(--border2)', flexShrink: 0 }}
           >
             <Maximize2 size={13} style={{ color: 'var(--red-ember)' }} />
           </button>
@@ -176,10 +221,14 @@ export const NowPlaying = () => {
               <div style={{ 
                 flex: 1, 
                 minHeight: 0, 
+                width: '100%',
                 background: '#000', 
                 borderRadius: 'var(--radius-sm)', 
                 overflow: 'hidden',
                 position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 marginBottom: '6px'
               }}>
                 <iframe
@@ -189,7 +238,7 @@ export const NowPlaying = () => {
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                   onError={() => setEmbedError(true)}
-                  style={{ width: '100%', height: '100%', border: 'none', minHeight: '130px' }}
+                  style={{ width: '100%', height: '100%', border: 'none', objectFit: 'contain' }}
                 />
               </div>
             )
@@ -198,6 +247,7 @@ export const NowPlaying = () => {
             <div style={{ 
               flex: 1, 
               minHeight: 0, 
+              width: '100%',
               background: '#000', 
               borderRadius: 'var(--radius-sm)', 
               overflow: 'hidden',
@@ -213,7 +263,7 @@ export const NowPlaying = () => {
                 onTimeUpdate={handleNativeTimeUpdate}
                 onEnded={handleEnded}
                 playsInline
-                style={{ width: '100%', height: '100%', objectFit: 'contain', maxHeight: '140px' }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             </div>
           ) : (
@@ -221,6 +271,7 @@ export const NowPlaying = () => {
             <div style={{ 
               flex: 1, 
               minHeight: 0, 
+              width: '100%',
               background: 'var(--bg2)', 
               borderRadius: 'var(--radius-sm)', 
               padding: '12px',
@@ -249,10 +300,11 @@ export const NowPlaying = () => {
               }}>
                 <Music size={20} style={{ color: isPlaying ? 'var(--red-ember)' : 'var(--text2)' }} />
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {currentMedia.originalname || currentMedia.filename}
-                </div>
+              <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                <RotatingTitle 
+                  text={currentMedia.originalname || currentMedia.filename}
+                  style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text)' }}
+                />
                 <div style={{ fontSize: '0.68rem', color: 'var(--amber)', fontFamily: 'var(--mono)', marginTop: '2px' }}>
                   AUDIO VAULT FILE
                 </div>
@@ -261,9 +313,10 @@ export const NowPlaying = () => {
           )}
 
           {/* Title Banner */}
-          <div style={{ fontSize: '0.8rem', fontWeight: '600', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: '4px' }}>
-            {currentMedia.title || currentMedia.originalname || currentMedia.filename}
-          </div>
+          <RotatingTitle 
+            text={currentMedia.title || currentMedia.originalname || currentMedia.filename}
+            style={{ fontSize: '0.8rem', fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}
+          />
 
           {/* Scrub Bar & Controls */}
           <div style={{ flexShrink: 0 }}>
@@ -343,9 +396,10 @@ export const NowPlaying = () => {
             alignItems: 'center',
             zIndex: 10
           }}>
-            <div style={{ color: '#fff', fontSize: '0.9rem', fontFamily: 'var(--mono)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
-              {currentMedia.title || currentMedia.originalname || currentMedia.filename}
-            </div>
+            <RotatingTitle 
+              text={currentMedia.title || currentMedia.originalname || currentMedia.filename}
+              style={{ color: '#fff', fontSize: '0.9rem', fontFamily: 'var(--mono)', maxWidth: '80%' }}
+            />
             <button 
               onClick={() => setIsFullscreen(false)}
               style={{
