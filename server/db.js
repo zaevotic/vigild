@@ -26,11 +26,22 @@ const defaultData = {
     }
   ],
   media: [],
+  playlists: [
+    {
+      id: 'pl_default',
+      name: 'Cyber Stock Mix',
+      tracks: [],
+      createdAt: new Date().toISOString()
+    }
+  ],
   playbackState: {
     currentMedia: null,
     isPlaying: false,
     currentTime: 0,
-    duration: 0
+    duration: 0,
+    shuffle: false,
+    repeat: 'off',
+    activePlaylistId: null
   },
   settings: {
     deviceName: 'Samsung M34 Desk Server',

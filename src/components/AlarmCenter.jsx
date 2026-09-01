@@ -1,127 +1,31 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useDashboard } from '../context/DashboardContext';
-import { CustomKeyboard } from './CustomKeyboard';
-import { Bell, Plus, Trash2, Volume2, AlertTriangle, X, Music, Edit3, Keyboard } from 'lucide-react';
+import { Bell, Plus, Trash2, Volume2, X, Music } from 'lucide-react';
 
 const AVAILABLE_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export const AlarmCenter = ({ onEditAlarmExternal }) => {
+export const AlarmCenter = () => {
   const {
     alarms,
-    activeAlarm,
     availableTones,
     addAlarm,
-    updateAlarm,
     toggleAlarm,
     triggerAlarmTest,
-    dismissAlarm,
-    snoozeAlarm,
     deleteAlarm
   } = useDashboard();
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [editingAlarmId, setEditingAlarmId] = useState(null);
-
   const [newTime, setNewTime] = useState('07:30');
   const [newLabel, setNewLabel] = useState('');
   const [selectedDays, setSelectedDays] = useState(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
   const [selectedToneFile, setSelectedToneFile] = useState('');
 
-  const [showKeyboard, setShowKeyboard] = useState(false);
-
-  const audioCtxRef = useRef(null);
-  const synthTimerRef = useRef(null);
-  const audioFileRef = useRef(null);
-
-  // Set initial tone when availableTones load
+  // Set initial selected tone when availableTones load
   useEffect(() => {
     if (availableTones.length > 0 && !selectedToneFile) {
       setSelectedToneFile(availableTones[0].filename);
     }
   }, [availableTones]);
-
-  // Handle ring audio playback
-  useEffect(() => {
-    if (activeAlarm) {
-      startAlarmPlayback();
-    } else {
-      stopAlarmPlayback();
-    }
-    return () => stopAlarmPlayback();
-  }, [activeAlarm]);
-
-  const startAlarmPlayback = () => {
-    if (audioFileRef.current) {
-      audioFileRef.current.currentTime = 0;
-      audioFileRef.current.play().catch(err => {
-        console.warn('[Audio Playback Blocked, using synth fallback]', err);
-        startSynthAlarmSound();
-      });
-    } else {
-      startSynthAlarmSound();
-    }
-  };
-
-  const stopAlarmPlayback = () => {
-    if (audioFileRef.current) {
-      audioFileRef.current.pause();
-      audioFileRef.current.currentTime = 0;
-    }
-    stopSynthAlarmSound();
-  };
-
-  const startSynthAlarmSound = () => {
-    try {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-
-      let step = 0;
-      synthTimerRef.current = setInterval(() => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = step % 2 === 0 ? 'square' : 'sawtooth';
-        osc.frequency.setValueAtTime(step % 2 === 0 ? 880 : 1320, ctx.currentTime);
-        
-        gain.gain.setValueAtTime(0.3, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.3);
-        step++;
-      }, 500);
-    } catch (e) {}
-  };
-
-  const stopSynthAlarmSound = () => {
-    if (synthTimerRef.current) {
-      clearInterval(synthTimerRef.current);
-      synthTimerRef.current = null;
-    }
-  };
-
-  const openNewAlarmModal = () => {
-    setEditingAlarmId(null);
-    setNewTime('07:30');
-    setNewLabel('');
-    setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
-    if (availableTones.length > 0) setSelectedToneFile(availableTones[0].filename);
-    setShowAddModal(true);
-  };
-
-  const openEditAlarmModal = (alarm) => {
-    setEditingAlarmId(alarm.id);
-    setNewTime(alarm.time);
-    setNewLabel(alarm.label);
-    setSelectedDays(alarm.days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
-    const matchedTone = availableTones.find(t => t.name === alarm.tone || t.url === alarm.toneUrl);
-    if (matchedTone) setSelectedToneFile(matchedTone.filename);
-    setShowAddModal(true);
-  };
 
   const handleDayToggle = (day) => {
     if (selectedDays.includes(day)) {
@@ -131,7 +35,7 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
     }
   };
 
-  const handleSave = async (e) => {
+  const handleCreate = async (e) => {
     e.preventDefault();
     if (!newTime) return;
 
@@ -139,20 +43,14 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
     const toneName = matchedToneObj ? matchedToneObj.name : 'Default Cyber Alarm';
     const toneUrl = matchedToneObj ? matchedToneObj.url : '/uploads/tones/default_cyber_alarm.wav';
 
-    const payload = {
+    await addAlarm({
       time: newTime,
       label: newLabel || 'Alarm',
       days: selectedDays,
       tone: toneName,
       toneUrl: toneUrl,
       snoozeMinutes: 5
-    };
-
-    if (editingAlarmId) {
-      await updateAlarm(editingAlarmId, payload);
-    } else {
-      await addAlarm(payload);
-    }
+    });
 
     setNewLabel('');
     setShowAddModal(false);
@@ -168,7 +66,7 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
             ALARM HUB
           </h2>
         </div>
-        <button className="btn-primary" onClick={openNewAlarmModal} style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
+        <button className="btn-primary" onClick={() => setShowAddModal(true)} style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
           <Plus size={14} />
           ADD ALARM
         </button>
@@ -184,7 +82,6 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
           alarms.map(alarm => (
             <div 
               key={alarm.id} 
-              onClick={() => openEditAlarmModal(alarm)}
               style={{
                 background: alarm.enabled ? 'var(--bg2)' : 'var(--bg)',
                 border: `1px solid ${alarm.enabled ? 'var(--border2)' : 'var(--border)'}`,
@@ -193,8 +90,7 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                opacity: alarm.enabled ? 1 : 0.65,
-                cursor: 'pointer'
+                opacity: alarm.enabled ? 1 : 0.65
               }}
             >
               <div>
@@ -205,7 +101,6 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                   <span style={{ fontSize: '0.85rem', color: 'var(--text)' }}>
                     {alarm.label}
                   </span>
-                  <Edit3 size={12} style={{ color: 'var(--text3)', marginLeft: '4px' }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' }}>
                   <div style={{ display: 'flex', gap: '3px' }}>
@@ -221,10 +116,10 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <button 
                   onClick={() => triggerAlarmTest(alarm.id)} 
-                  title="Test Ring Alarm Remotely"
+                  title="Test Ring Alarm Remotely over Wi-Fi"
                   style={{ padding: '4px 8px', fontSize: '0.7rem' }}
                 >
                   <Volume2 size={12} style={{ color: 'var(--amber)' }} />
@@ -246,7 +141,7 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                 </button>
                 <button 
                   onClick={() => deleteAlarm(alarm.id)}
-                  style={{ padding: '4px', color: 'var(--text3)' }}
+                  style={{ padding: '4px', color: 'var(--text3)', background: 'transparent', border: 'none' }}
                 >
                   <Trash2 size={13} />
                 </button>
@@ -256,7 +151,7 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
         )}
       </div>
 
-      {/* FLOATING ADD / EDIT ALARM MODAL OVERLAY */}
+      {/* FLOATING ADD ALARM MODAL OVERLAY */}
       {showAddModal && (
         <div 
           onClick={() => setShowAddModal(false)}
@@ -289,14 +184,14 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ fontSize: '1rem', fontFamily: 'var(--mono)', fontWeight: '700', color: 'var(--text)' }}>
-                {editingAlarmId ? 'EDIT ALARM SETTINGS' : 'NEW ALARM SCHEDULE'}
+                NEW ALARM SCHEDULE
               </div>
               <button onClick={() => setShowAddModal(false)} style={{ padding: '4px', background: 'transparent', border: 'none', color: 'var(--text2)' }}>
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSave}>
+            <form onSubmit={handleCreate}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginBottom: '14px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text2)', marginBottom: '4px' }}>TIME</label>
@@ -309,30 +204,21 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text2)', marginBottom: '4px' }}>LABEL (TAP FOR KEYBOARD)</label>
-                  <div style={{ position: 'relative' }}>
-                    <input 
-                      type="text" 
-                      placeholder="e.g. Work Focus" 
-                      value={newLabel} 
-                      readOnly
-                      onClick={() => setShowKeyboard(true)}
-                      onFocus={(e) => { e.target.blur(); setShowKeyboard(true); }}
-                      style={{ width: '100%', padding: '8px 30px 8px 8px', fontSize: '0.85rem', cursor: 'pointer' }}
-                    />
-                    <Keyboard 
-                      size={15} 
-                      onClick={() => setShowKeyboard(true)} 
-                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--red-ember)', cursor: 'pointer' }} 
-                    />
-                  </div>
+                  <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text2)', marginBottom: '4px' }}>LABEL</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Work Focus, Wakeup" 
+                    value={newLabel} 
+                    onChange={(e) => setNewLabel(e.target.value)} 
+                    style={{ width: '100%', padding: '8px', fontSize: '0.85rem' }}
+                  />
                 </div>
               </div>
 
               {/* Tone File Selector */}
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text2)', marginBottom: '4px' }}>
-                  ALARM SOUND FILE (`uploads/tones/`)
+                  ALARM SOUND FILE (DROP AUDIO FILES IN uploads/tones/)
                 </label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Music size={16} style={{ color: 'var(--amber)' }} />
@@ -381,102 +267,15 @@ export const AlarmCenter = ({ onEditAlarmExternal }) => {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'center' }}>
-                {editingAlarmId ? (
-                  <button 
-                    type="button" 
-                    onClick={() => { deleteAlarm(editingAlarmId); setShowAddModal(false); }}
-                    style={{ padding: '8px 12px', color: 'var(--red-ember)', borderColor: 'var(--red-mute)', fontSize: '0.8rem' }}
-                  >
-                    <Trash2 size={13} /> DELETE
-                  </button>
-                ) : <div />}
-
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button type="button" onClick={() => setShowAddModal(false)} style={{ padding: '8px 14px' }}>
-                    CANCEL
-                  </button>
-                  <button type="submit" className="btn-primary" style={{ padding: '8px 16px' }}>
-                    {editingAlarmId ? 'UPDATE ALARM' : 'SAVE ALARM'}
-                  </button>
-                </div>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setShowAddModal(false)} style={{ padding: '8px 14px' }}>
+                  CANCEL
+                </button>
+                <button type="submit" className="btn-primary" style={{ padding: '8px 16px' }}>
+                  SAVE ALARM
+                </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* CUSTOM TOUCH KEYBOARD PANE MODAL */}
-      {showKeyboard && (
-        <CustomKeyboard 
-          value={newLabel}
-          onChange={(val) => setNewLabel(val)}
-          onClose={() => setShowKeyboard(false)}
-          title="TYPE ALARM LABEL"
-        />
-      )}
-
-      {/* ACTIVE RINGING ALARM MODAL */}
-      {activeAlarm && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(10, 9, 8, 0.95)',
-          zIndex: 9999,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '20px'
-        }}>
-          <audio 
-            ref={audioFileRef} 
-            src={activeAlarm.toneUrl || '/uploads/tones/default_cyber_alarm.wav'} 
-            loop 
-            preload="auto"
-          />
-
-          <div 
-            className="alarm-ringing-overlay"
-            style={{
-              width: '100%',
-              maxWidth: '440px',
-              borderRadius: 'var(--radius-lg)',
-              border: '2px solid var(--red-ember)',
-              padding: '32px 20px',
-              textAlign: 'center',
-              boxShadow: 'var(--shadow-ember)'
-            }}
-          >
-            <AlertTriangle size={56} style={{ color: '#fff', marginBottom: '12px' }} />
-            <h1 style={{ fontSize: '3rem', fontFamily: 'var(--mono)', fontWeight: '900', color: '#fff', margin: '8px 0' }}>
-              {activeAlarm.time}
-            </h1>
-            <h2 style={{ fontSize: '1.2rem', color: 'var(--text)', marginBottom: '8px' }}>
-              {activeAlarm.label}
-            </h2>
-            <div style={{ fontSize: '0.8rem', color: 'var(--amber)', fontFamily: 'var(--mono)', marginBottom: '24px' }}>
-              SOUND TONE: {activeAlarm.tone || 'Cyber Alarm'}
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-              <button 
-                onClick={snoozeAlarm} 
-                className="btn-amber"
-                style={{ padding: '12px 20px', fontSize: '1rem', fontWeight: '700' }}
-              >
-                SNOOZE (5M)
-              </button>
-              <button 
-                onClick={dismissAlarm} 
-                className="btn-primary"
-                style={{ padding: '12px 20px', fontSize: '1rem', fontWeight: '700' }}
-              >
-                DISMISS
-              </button>
-            </div>
           </div>
         </div>
       )}

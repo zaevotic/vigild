@@ -1,15 +1,63 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DashboardProvider } from './context/DashboardContext';
 import { ClockHUD } from './components/ClockHUD';
 import { AlarmCenter } from './components/AlarmCenter';
 import { StorageMonitor } from './components/StorageMonitor';
 import { StorageDirectoryPanel } from './components/StorageDirectoryPanel';
 import { NowPlaying } from './components/NowPlaying';
-import { Clock, Bell, HardDrive, Zap } from 'lucide-react';
+import { PlaylistStock } from './components/PlaylistStock';
+import { GlobalAlarmRinger } from './components/GlobalAlarmRinger';
+import { GlobalAudioEngine } from './components/GlobalAudioEngine';
+import { Clock, Bell, HardDrive, ListMusic, Zap } from 'lucide-react';
+
+const TABS = ['all', 'clock', 'media', 'alarms', 'storage'];
 
 const MainLayout = () => {
   const [activeTab, setActiveTab] = useState('all');
   const [wakeLockActive, setWakeLockActive] = useState(false);
+
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0, isSlider: false });
+
+  // Swipe gesture detection to switch tabs seamlessly
+  const handleTouchStart = (e) => {
+    const touch = e.touches[0];
+    const target = e.target;
+    // Don't trigger page swipe if user is dragging an audio seekbar slider
+    const isSlider = target && (target.tagName === 'INPUT' && target.type === 'range');
+
+    touchStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now(),
+      isSlider
+    };
+  };
+
+  const handleTouchEnd = (e) => {
+    if (touchStartRef.current.isSlider) return;
+
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+    const elapsedTime = Date.now() - touchStartRef.current.time;
+
+    // Must be a predominantly horizontal swipe of at least 45px within 700ms
+    if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.3 && elapsedTime < 700) {
+      const currentIndex = TABS.indexOf(activeTab);
+
+      if (deltaX < 0) {
+        // Swipe Left -> Next Tab
+        if (currentIndex < TABS.length - 1) {
+          setActiveTab(TABS[currentIndex + 1]);
+        }
+      } else {
+        // Swipe Right -> Prev Tab
+        if (currentIndex > 0) {
+          setActiveTab(TABS[currentIndex - 1]);
+        }
+      }
+    }
+  };
 
   // W3C Screen Wake Lock API - Keeps phone screen awake indefinitely
   useEffect(() => {
@@ -32,7 +80,6 @@ const MainLayout = () => {
 
     requestWakeLock();
 
-    // Re-acquire Wake Lock when user switches back to vigild tab/app
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         requestWakeLock();
@@ -50,16 +97,27 @@ const MainLayout = () => {
   }, []);
 
   return (
-    <div style={{ 
-      width: '100vw', 
-      height: '100dvh', 
-      maxHeight: '100dvh',
-      display: 'flex', 
-      flexDirection: 'column', 
-      padding: '8px 10px', 
-      overflow: 'hidden',
-      boxSizing: 'border-box'
-    }}>
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      style={{ 
+        width: '100vw', 
+        height: '100dvh', 
+        maxHeight: '100dvh',
+        display: 'flex', 
+        flexDirection: 'column', 
+        padding: '8px 10px', 
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        touchAction: 'pan-y'
+      }}
+    >
+      {/* Global Background Audio Player (Continuous uninterrupted playback across all tabs) */}
+      <GlobalAudioEngine />
+
+      {/* Global Ringing Alarm Sound & Modal Overlay (Active across all tabs) */}
+      <GlobalAlarmRinger />
+
       {/* Compact Navbar Header */}
       <header style={{ 
         display: 'flex', 
@@ -125,6 +183,13 @@ const MainLayout = () => {
             <Clock size={11} /> CLOCK
           </button>
           <button 
+            className={activeTab === 'media' ? 'btn-primary' : ''} 
+            onClick={() => setActiveTab('media')}
+            style={{ fontSize: '0.7rem', padding: '3px 8px' }}
+          >
+            <ListMusic size={11} /> PLAYLISTS
+          </button>
+          <button 
             className={activeTab === 'alarms' ? 'btn-primary' : ''} 
             onClick={() => setActiveTab('alarms')}
             style={{ fontSize: '0.7rem', padding: '3px 8px' }}
@@ -163,6 +228,12 @@ const MainLayout = () => {
         {activeTab === 'clock' && (
           <div style={{ height: '100%', minHeight: 0 }}>
             <ClockHUD onEditAlarm={() => setActiveTab('alarms')} />
+          </div>
+        )}
+
+        {activeTab === 'media' && (
+          <div style={{ height: '100%', minHeight: 0 }}>
+            <PlaylistStock />
           </div>
         )}
 
