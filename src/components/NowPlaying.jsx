@@ -68,10 +68,16 @@ export const NowPlaying = () => {
 
   const { currentMedia, isPlaying, currentTime, duration, shuffle, repeat } = playbackState;
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [coverFailed, setCoverFailed] = useState(false);
   const videoRef = useRef(null);
 
   const isValidMedia = isMediaFile(currentMedia);
   const isVideo = isValidMedia && (currentMedia?.type === 'video' || (currentMedia?.filename && /\.(mp4|mkv|webm|mov|avi)$/i.test(currentMedia.filename)));
+
+  // Reset cover error on track change
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [currentMedia?.path, currentMedia?.id, currentMedia?.filename]);
 
   // Sync video element time with global audio engine if video is playing
   useEffect(() => {
@@ -94,6 +100,22 @@ export const NowPlaying = () => {
   };
 
   const validMediaList = (media || []).filter(isMediaFile);
+
+  const coverUrl = currentMedia ? (
+    currentMedia.coverUrl || `/api/files/cover?path=${encodeURIComponent(currentMedia.path || currentMedia.filename || '')}`
+  ) : null;
+
+  // Split artist and title if formatted as "Artist - Title"
+  const rawTitle = currentMedia ? (currentMedia.title || currentMedia.originalname || currentMedia.name || currentMedia.filename || '') : '';
+  const cleanTitle = rawTitle.replace(/\.[^/.]+$/, ''); // remove extension
+  let displayArtist = '';
+  let displaySong = cleanTitle;
+
+  if (cleanTitle.includes(' - ')) {
+    const parts = cleanTitle.split(' - ');
+    displayArtist = parts[0].trim();
+    displaySong = parts.slice(1).join(' - ').trim();
+  }
 
   return (
     <div className="panel-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '10px 12px' }}>
@@ -138,7 +160,7 @@ export const NowPlaying = () => {
         }}>
           <Disc size={28} style={{ color: 'var(--text3)', opacity: 0.5 }} />
           <div>Nothing playing</div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>Select a playlist or track in MEDIA tab</div>
+          <div style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>Select a song or playlist in MUSIC tab</div>
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', justifyContent: 'space-between' }}>
@@ -167,50 +189,81 @@ export const NowPlaying = () => {
               />
             </div>
           ) : (
-            /* LOCAL AUDIO VAULT BRANCH */
+            /* LOCAL AUDIO VAULT BRANCH WITH ALBUM COVER DISPLAY */
             <div style={{ 
               flex: 1, 
               minHeight: 0, 
               width: '100%',
               background: 'var(--bg2)', 
               borderRadius: 'var(--radius-sm)', 
-              padding: '12px',
+              padding: '8px 10px',
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
+              gap: '10px',
               border: '1px solid var(--border)',
-              marginBottom: '6px'
+              marginBottom: '6px',
+              overflow: 'hidden'
             }}>
+              {/* Album Art Cover / Stylized Vinyl Disk */}
               <div style={{ 
-                width: '42px', 
-                height: '42px', 
-                borderRadius: '50%', 
-                background: isPlaying ? 'var(--red-mute)' : 'var(--bg3)',
-                border: `1px solid ${isPlaying ? 'var(--red-ember)' : 'var(--border)'}`,
+                width: '54px', 
+                height: '54px', 
+                borderRadius: '6px', 
+                background: 'var(--bg1)',
+                border: `1px solid ${isPlaying ? 'var(--red-ember)' : 'var(--border2)'}`,
+                boxShadow: isPlaying ? '0 0 12px rgba(217, 68, 50, 0.25)' : 'none',
                 display: 'flex', 
                 alignItems: 'center', 
                 justifyContent: 'center',
-                flexShrink: 0
+                flexShrink: 0,
+                overflow: 'hidden',
+                position: 'relative'
               }}>
-                <Music size={20} style={{ color: isPlaying ? 'var(--red-ember)' : 'var(--text2)' }} />
+                {!coverFailed && coverUrl ? (
+                  <img 
+                    src={coverUrl} 
+                    alt="Album Cover"
+                    onError={() => setCoverFailed(true)}
+                    style={{ 
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'cover'
+                    }} 
+                  />
+                ) : (
+                  /* Stylized Cyber Vinyl Graphic fallback */
+                  <div style={{
+                    width: '100%',
+                    height: '100%',
+                    background: 'radial-gradient(circle, #251614 35%, #120b09 70%, #0a0706 100%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <Disc size={26} className={isPlaying ? 'animate-spin' : ''} style={{ color: isPlaying ? 'var(--red-ember)' : 'var(--amber)' }} />
+                  </div>
+                )}
               </div>
+
+              {/* Title & Artist Info */}
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                 <RotatingTitle 
-                  text={currentMedia.title || currentMedia.originalname || currentMedia.name || currentMedia.filename}
-                  style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text)' }}
+                  text={displaySong}
+                  style={{ fontSize: '0.82rem', fontWeight: '700', color: 'var(--text)', lineHeight: '1.2' }}
                 />
-                <div style={{ fontSize: '0.68rem', color: isPlaying ? 'var(--red-ember)' : 'var(--amber)', fontFamily: 'var(--mono)', marginTop: '2px' }}>
-                  {isPlaying ? '▶ GLOBAL AUDIO' : 'PAUSED'}
-                </div>
+                
+                {displayArtist ? (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--amber)', fontFamily: 'var(--mono)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {displayArtist}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.65rem', color: isPlaying ? 'var(--red-ember)' : 'var(--text3)', fontFamily: 'var(--mono)', marginTop: '2px' }}>
+                    {isPlaying ? '▶ GLOBAL AUDIO' : 'PAUSED'}
+                  </div>
+                )}
               </div>
             </div>
           )}
-
-          {/* Title Banner */}
-          <RotatingTitle 
-            text={currentMedia.title || currentMedia.originalname || currentMedia.name || currentMedia.filename}
-            style={{ fontSize: '0.8rem', fontWeight: '600', color: 'var(--text)', marginBottom: '4px' }}
-          />
 
           {/* Scrub Bar & Controls */}
           <div style={{ flexShrink: 0 }}>

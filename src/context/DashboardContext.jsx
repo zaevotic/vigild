@@ -15,6 +15,7 @@ export const DashboardProvider = ({ children }) => {
   const [availableTones, setAvailableTones] = useState([]);
   const [media, setMedia] = useState([]);
   const [playlists, setPlaylists] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [playbackState, setPlaybackState] = useState({
     currentMedia: null,
     isPlaying: false,
@@ -49,10 +50,11 @@ export const DashboardProvider = ({ children }) => {
   // Fetch initial REST data
   const refreshAllData = async () => {
     try {
-      const [alarmsRes, filesRes, playlistsRes, sysRes] = await Promise.all([
+      const [alarmsRes, filesRes, playlistsRes, tasksRes, sysRes] = await Promise.all([
         fetch('/api/alarms').then(r => r.json()).catch(() => ({})),
         fetch('/api/files').then(r => r.json()).catch(() => []),
         fetch('/api/playlists').then(r => r.json()).catch(() => []),
+        fetch('/api/tasks').then(r => r.json()).catch(() => []),
         fetch('/api/system').then(r => r.json()).catch(() => null)
       ]);
 
@@ -60,6 +62,7 @@ export const DashboardProvider = ({ children }) => {
       if (alarmsRes && alarmsRes.activeAlarm !== undefined) setActiveAlarm(alarmsRes.activeAlarm);
       if (Array.isArray(filesRes)) setMedia(filesRes);
       if (Array.isArray(playlistsRes)) setPlaylists(playlistsRes);
+      if (Array.isArray(tasksRes)) setTasks(tasksRes);
       if (sysRes) {
         setSystem(sysRes);
         if (sysRes.settings) setSettings(sysRes.settings);
@@ -99,6 +102,7 @@ export const DashboardProvider = ({ children }) => {
                 if (payload.activeAlarm !== undefined) setActiveAlarm(payload.activeAlarm);
                 if (payload.media) setMedia(payload.media);
                 if (payload.playlists) setPlaylists(payload.playlists);
+                if (payload.tasks) setTasks(payload.tasks);
                 if (payload.playbackState) setPlaybackState(prev => ({ ...prev, ...payload.playbackState }));
                 if (payload.settings) setSettings(payload.settings);
                 break;
@@ -118,6 +122,9 @@ export const DashboardProvider = ({ children }) => {
                 break;
               case 'PLAYLISTS_UPDATED':
                 setPlaylists(payload);
+                break;
+              case 'TASKS_UPDATED':
+                setTasks(payload);
                 break;
               case 'PLAYBACK_UPDATED':
                 setPlaybackState(prev => ({ ...prev, ...payload }));
@@ -369,6 +376,68 @@ export const DashboardProvider = ({ children }) => {
     }
   };
 
+  // Task Actions
+  const addTask = async (taskData) => {
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData)
+      });
+      const data = await res.json();
+      if (data.task) {
+        setTasks(prev => [data.task, ...prev]);
+      }
+      return data;
+    } catch (err) {
+      console.error('[addTask Error]', err);
+    }
+  };
+
+  const updateTask = async (id, taskData) => {
+    try {
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, ...taskData } : t));
+      const res = await fetch(`/api/tasks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData)
+      });
+      return res.json();
+    } catch (err) {
+      console.error('[updateTask Error]', err);
+    }
+  };
+
+  const toggleTask = async (id) => {
+    try {
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+      const res = await fetch(`/api/tasks/${id}/toggle`, { method: 'PATCH' });
+      return res.json();
+    } catch (err) {
+      console.error('[toggleTask Error]', err);
+    }
+  };
+
+  const deleteTask = async (id) => {
+    try {
+      setTasks(prev => prev.filter(t => t.id !== id));
+      const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+      return res.json();
+    } catch (err) {
+      console.error('[deleteTask Error]', err);
+    }
+  };
+
+  const clearCompletedTasks = async () => {
+    try {
+      setTasks(prev => prev.filter(t => !t.completed));
+      const res = await fetch('/api/tasks/clear-completed', { method: 'POST' });
+      return res.json();
+    } catch (err) {
+      console.error('[clearCompletedTasks Error]', err);
+    }
+  };
+
   // Alarm actions with direct state updates & fallback refresh
   const addAlarm = async (alarmData) => {
     try {
@@ -486,6 +555,7 @@ export const DashboardProvider = ({ children }) => {
       availableTones,
       media,
       playlists,
+      tasks,
       playbackState,
       settings,
       system,
@@ -504,6 +574,11 @@ export const DashboardProvider = ({ children }) => {
       addTrackToPlaylist,
       removeTrackFromPlaylist,
       deletePlaylist,
+      addTask,
+      updateTask,
+      toggleTask,
+      deleteTask,
+      clearCompletedTasks,
       addAlarm,
       updateAlarm,
       toggleAlarm,

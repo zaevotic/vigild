@@ -12,6 +12,7 @@ import alarmsRouter from './routes/alarms.js';
 import systemRouter, { resolveStoragePath } from './routes/system.js';
 import playbackRouter from './routes/playback.js';
 import playlistsRouter from './routes/playlists.js';
+import tasksRouter from './routes/tasks.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,6 +70,7 @@ wss.on('connection', (ws) => {
       activeAlarm: db.get('activeAlarm'),
       media: db.get('media') || [],
       playlists: db.get('playlists') || [],
+      tasks: db.get('tasks') || [],
       playbackState: db.get('playbackState') || { currentMedia: null, isPlaying: false, currentTime: 0, duration: 0 },
       settings: db.get('settings') || {}
     }
@@ -107,6 +109,7 @@ app.use('/api/alarms', alarmsRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/playback', playbackRouter);
 app.use('/api/playlists', playlistsRouter);
+app.use('/api/tasks', tasksRouter);
 
 // Background alarm trigger loop (checks every 10 seconds)
 let lastTriggeredMinute = '';

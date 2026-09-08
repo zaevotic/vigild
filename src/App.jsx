@@ -6,43 +6,66 @@ import { StorageMonitor } from './components/StorageMonitor';
 import { StorageDirectoryPanel } from './components/StorageDirectoryPanel';
 import { NowPlaying } from './components/NowPlaying';
 import { PlaylistStock } from './components/PlaylistStock';
+import { TaskCenter } from './components/TaskCenter';
 import { GlobalAlarmRinger } from './components/GlobalAlarmRinger';
 import { GlobalAudioEngine } from './components/GlobalAudioEngine';
-import { Clock, Bell, HardDrive, ListMusic, Zap } from 'lucide-react';
+import { Clock, Bell, HardDrive, Music, Target, Zap } from 'lucide-react';
 
-const TABS = ['all', 'clock', 'media', 'alarms', 'storage'];
+const TABS = ['all', 'clock', 'media', 'tasks', 'alarms', 'storage'];
 
 const MainLayout = () => {
   const [activeTab, setActiveTab] = useState('all');
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
-  const touchStartRef = useRef({ x: 0, y: 0, time: 0, isSlider: false });
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0, ignore: false });
 
-  // Swipe gesture detection to switch tabs seamlessly
+  // Swipe gesture detection to switch tabs seamlessly without interfering with buttons or file uploads
   const handleTouchStart = (e) => {
     const touch = e.touches[0];
     const target = e.target;
-    // Don't trigger page swipe if user is dragging an audio seekbar slider
-    const isSlider = target && (target.tagName === 'INPUT' && target.type === 'range');
+    // Don't trigger page swipe if user touches interactive elements (buttons, inputs, labels, sliders, modals)
+    const isInteractive = target && (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'BUTTON' ||
+      target.tagName === 'LABEL' ||
+      target.tagName === 'SELECT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.closest('button') ||
+      target.closest('label') ||
+      target.closest('input') ||
+      target.closest('select') ||
+      target.closest('form') ||
+      target.closest('[role="dialog"]')
+    );
 
     touchStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
       time: Date.now(),
-      isSlider
+      ignore: !!isInteractive
     };
   };
 
+  const handleTouchCancel = () => {
+    touchStartRef.current = { x: 0, y: 0, time: 0, ignore: true };
+  };
+
   const handleTouchEnd = (e) => {
-    if (touchStartRef.current.isSlider) return;
+    const start = touchStartRef.current;
+    // Always reset touch ref immediately
+    touchStartRef.current = { x: 0, y: 0, time: 0, ignore: true };
+
+    if (!start || start.ignore || start.time === 0) return;
 
     const touch = e.changedTouches[0];
-    const deltaX = touch.clientX - touchStartRef.current.x;
-    const deltaY = touch.clientY - touchStartRef.current.y;
-    const elapsedTime = Date.now() - touchStartRef.current.time;
+    if (!touch) return;
 
-    // Must be a predominantly horizontal swipe of at least 45px within 700ms
-    if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.3 && elapsedTime < 700) {
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    const elapsedTime = Date.now() - start.time;
+
+    // Must be a deliberate horizontal swipe: between 60ms and 500ms, at least 50px offset
+    if (elapsedTime > 60 && elapsedTime < 500 && Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.4) {
       const currentIndex = TABS.indexOf(activeTab);
 
       if (deltaX < 0) {
@@ -100,6 +123,7 @@ const MainLayout = () => {
     <div 
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
       style={{ 
         width: '100vw', 
         height: '100dvh', 
@@ -187,7 +211,14 @@ const MainLayout = () => {
             onClick={() => setActiveTab('media')}
             style={{ fontSize: '0.7rem', padding: '3px 8px' }}
           >
-            <ListMusic size={11} /> PLAYLISTS
+            <Music size={11} /> MUSIC
+          </button>
+          <button 
+            className={activeTab === 'tasks' ? 'btn-primary' : ''} 
+            onClick={() => setActiveTab('tasks')}
+            style={{ fontSize: '0.7rem', padding: '3px 8px' }}
+          >
+            <Target size={11} /> FOCUS
           </button>
           <button 
             className={activeTab === 'alarms' ? 'btn-primary' : ''} 
@@ -234,6 +265,12 @@ const MainLayout = () => {
         {activeTab === 'media' && (
           <div style={{ height: '100%', minHeight: 0 }}>
             <PlaylistStock />
+          </div>
+        )}
+
+        {activeTab === 'tasks' && (
+          <div style={{ height: '100%', minHeight: 0 }}>
+            <TaskCenter />
           </div>
         )}
 

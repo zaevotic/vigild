@@ -9,6 +9,35 @@ function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+const TrackThumbnail = ({ track, isPlaying = false, size = 20 }) => {
+  const [error, setError] = useState(false);
+  const coverUrl = track.coverUrl || `/api/files/cover?path=${encodeURIComponent(track.path || track.filename || '')}`;
+
+  if (error || !coverUrl) {
+    return track.type === 'video' ? (
+      <Film size={size * 0.7} style={{ color: 'var(--red-ember)', flexShrink: 0 }} />
+    ) : (
+      <Music size={size * 0.7} style={{ color: 'var(--amber)', flexShrink: 0 }} />
+    );
+  }
+
+  return (
+    <img 
+      src={coverUrl} 
+      alt=""
+      onError={() => setError(true)}
+      style={{ 
+        width: `${size}px`, 
+        height: `${size}px`, 
+        borderRadius: '3px', 
+        objectFit: 'cover',
+        flexShrink: 0,
+        border: '1px solid var(--border)'
+      }} 
+    />
+  );
+};
+
 export const PlaylistStock = () => {
   const {
     media,
@@ -32,8 +61,8 @@ export const PlaylistStock = () => {
 
   const { currentMedia, isPlaying, currentTime, duration, shuffle, repeat, activePlaylistId } = playbackState;
 
-  const [rightTab, setRightTab] = useState('stock'); // 'stock' | 'playlists'
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState(playlists[0]?.id || null);
+  const [rightTab, setRightTab] = useState('all'); // 'all' (universal music) | 'playlists' (lists)
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState('all'); // 'all' (Universal library) or playlist.id
   const [sortBy, setSortBy] = useState('custom'); // 'custom' | 'date_desc' | 'date_asc' | 'title_asc'
   
   // Modals state
@@ -47,10 +76,12 @@ export const PlaylistStock = () => {
 
   const fileInputRef = useRef(null);
 
-  // Sync selected playlist (fallback to first available or active)
-  const currentSelectedPlaylist = playlists.find(p => p.id === selectedPlaylistId) || playlists[0];
-  const activePlaylist = playlists.find(p => p.id === activePlaylistId);
   const validStockMedia = (media || []).filter(isMediaFile);
+
+  // Check if viewing universal 'all' songs or a specific playlist
+  const isViewingAll = selectedPlaylistId === 'all';
+  const currentSelectedPlaylist = isViewingAll ? null : (playlists.find(p => p.id === selectedPlaylistId) || playlists[0]);
+  const activePlaylist = playlists.find(p => p.id === activePlaylistId);
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -111,53 +142,70 @@ export const PlaylistStock = () => {
     if (!files || files.length === 0) return;
 
     setUploading(true);
+    const formData = new FormData();
     for (let i = 0; i < files.length; i++) {
-      const formData = new FormData();
-      formData.append('mediaFile', files[i]);
-
-      try {
-        await fetch('/api/files/upload', {
-          method: 'POST',
-          body: formData
-        });
-      } catch (err) {
-        console.error('[Upload Error]', err);
-      }
+      formData.append('mediaFiles', files[i]);
     }
-    setUploading(false);
-    refreshAllData();
-    showToast('Files uploaded to stock library');
+
+    try {
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      await refreshAllData();
+      showToast(`Offloaded ${data.count || files.length} track(s) to universal library`);
+    } catch (err) {
+      console.error('[Upload Error]', err);
+      showToast('Upload failed');
+    } finally {
+      setUploading(false);
+      if (e.target) e.target.value = '';
+    }
   };
 
-  // Sort tracks of currently selected playlist based on user preference
-  const sortedPlaylistTracks = useMemo(() => {
-    if (!currentSelectedPlaylist || !currentSelectedPlaylist.tracks) return [];
-    const tracks = [...currentSelectedPlaylist.tracks];
+  // Sort tracks of currently selected view (Universal All Tracks or Playlist)
+  const displayedTracks = useMemo(() => {
+    let rawList = [];
+    if (isViewingAll) {
+      rawList = [...validStockMedia];
+    } else if (currentSelectedPlaylist && currentSelectedPlaylist.tracks) {
+      rawList = [...currentSelectedPlaylist.tracks];
+    }
 
     if (sortBy === 'date_desc') {
-      return tracks.sort((a, b) => new Date(b.uploadDate || 0) - new Date(a.uploadDate || 0));
+      return rawList.sort((a, b) => new Date(b.uploadDate || 0) - new Date(a.uploadDate || 0));
     }
     if (sortBy === 'date_asc') {
-      return tracks.sort((a, b) => new Date(a.uploadDate || 0) - new Date(b.uploadDate || 0));
+      return rawList.sort((a, b) => new Date(a.uploadDate || 0) - new Date(b.uploadDate || 0));
     }
     if (sortBy === 'title_asc') {
-      return tracks.sort((a, b) => (a.title || a.originalname || a.name || '').localeCompare(b.title || b.originalname || b.name || ''));
+      return rawList.sort((a, b) => (a.title || a.originalname || a.name || '').localeCompare(b.title || b.originalname || b.name || ''));
     }
-    return tracks; // 'custom' preserved order
-  }, [currentSelectedPlaylist, sortBy]);
+    return rawList; // 'custom' preserved order
+  }, [isViewingAll, currentSelectedPlaylist, validStockMedia, sortBy]);
+
+  const handlePlayAll = () => {
+    if (displayedTracks.length === 0) return;
+    if (isViewingAll) {
+      playMedia(displayedTracks[0], null); // Universal queue
+    } else if (currentSelectedPlaylist) {
+      playPlaylist(currentSelectedPlaylist, 0); // Playlist queue
+    }
+  };
 
   return (
     <div style={{ height: '100%', display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '8px', overflow: 'hidden', padding: '2px 0' }}>
       
-      {/* LEFT COLUMN: SELECTED PLAYLIST VIEWER & SONG LIST */}
+      {/* LEFT COLUMN: UNIVERSAL / PLAYLIST SONG VIEWER & DECK */}
       <div className="panel-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 10px' }}>
         
-        {/* Row 1: Playlist Selector & Action */}
+        {/* Row 1: Source Selector (Universal All Tracks vs Custom Playlists) & Action */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0, gap: '4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, flex: 1 }}>
-            <ListMusic size={14} style={{ color: 'var(--red-ember)', flexShrink: 0 }} />
+            <Music size={14} style={{ color: 'var(--red-ember)', flexShrink: 0 }} />
             <select
-              value={currentSelectedPlaylist?.id || ''}
+              value={selectedPlaylistId}
               onChange={(e) => setSelectedPlaylistId(e.target.value)}
               style={{
                 background: 'var(--bg2)',
@@ -173,6 +221,7 @@ export const PlaylistStock = () => {
                 minWidth: 0
               }}
             >
+              <option value="all">ALL SONGS ({validStockMedia.length})</option>
               {playlists.map(pl => (
                 <option key={pl.id} value={pl.id}>
                   {pl.name} ({(pl.tracks || []).length})
@@ -180,16 +229,22 @@ export const PlaylistStock = () => {
               ))}
             </select>
 
-            {activePlaylistId === currentSelectedPlaylist?.id && (
+            {/* Indicator */}
+            {isViewingAll && !activePlaylistId && isPlaying && (
+              <span className="badge badge-ember font-mono" style={{ fontSize: '0.55rem', padding: '1px 3px', flexShrink: 0 }}>
+                PLAYING ALL
+              </span>
+            )}
+            {!isViewingAll && activePlaylistId === currentSelectedPlaylist?.id && isPlaying && (
               <span className="badge badge-amber font-mono" style={{ fontSize: '0.55rem', padding: '1px 3px', flexShrink: 0 }}>
                 PLAYING
               </span>
             )}
           </div>
 
-          {currentSelectedPlaylist && currentSelectedPlaylist.tracks && currentSelectedPlaylist.tracks.length > 0 && (
+          {displayedTracks.length > 0 && (
             <button 
-              onClick={() => playPlaylist(currentSelectedPlaylist, 0)}
+              onClick={handlePlayAll}
               className="btn-primary"
               style={{ padding: '2px 6px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }}
             >
@@ -198,16 +253,20 @@ export const PlaylistStock = () => {
           )}
         </div>
 
-        {/* Row 2: Deck Controls Bar */}
-        <div style={{ background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', marginBottom: '6px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px' }}>
+        {/* Row 2: Deck Controls Bar with Album Art */}
+        <div style={{ background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', marginBottom: '6px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', gap: '6px' }}>
+            {/* Album Cover Thumbnail */}
+            {currentMedia && (
+              <TrackThumbnail track={currentMedia} isPlaying={isPlaying} size={26} />
+            )}
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', minWidth: 0, flex: 1 }}>
-              <Disc size={11} className={isPlaying ? 'animate-spin' : ''} style={{ color: isPlaying ? 'var(--red-ember)' : 'var(--text3)', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {currentMedia ? (currentMedia.title || currentMedia.originalname || currentMedia.filename) : 'No track playing'}
               </span>
             </div>
-            <span style={{ fontSize: '0.6rem', fontFamily: 'var(--mono)', color: 'var(--text2)', flexShrink: 0, marginLeft: '4px' }}>
+            <span style={{ fontSize: '0.6rem', fontFamily: 'var(--mono)', color: 'var(--text2)', flexShrink: 0 }}>
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
@@ -269,7 +328,7 @@ export const PlaylistStock = () => {
         {/* Row 3: Sort Options and Subheader */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', flexShrink: 0 }}>
           <div style={{ fontSize: '0.65rem', fontFamily: 'var(--mono)', color: 'var(--text2)', textTransform: 'uppercase' }}>
-            SONG LIST ({sortedPlaylistTracks.length})
+            {isViewingAll ? 'ALL TRACKS (UNIVERSAL)' : (currentSelectedPlaylist?.name || 'PLAYLIST')} ({displayedTracks.length})
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '3px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
@@ -280,7 +339,7 @@ export const PlaylistStock = () => {
               style={{ background: 'transparent', border: 'none', color: 'var(--text2)', fontFamily: 'var(--mono)', fontSize: '0.62rem', cursor: 'pointer', outline: 'none' }}
               title="Sort track ordering"
             >
-              <option value="custom">Custom Order</option>
+              <option value="custom">Custom / Default</option>
               <option value="date_desc">Date Added (New)</option>
               <option value="date_asc">Date Added (Old)</option>
               <option value="title_asc">Title (A-Z)</option>
@@ -288,15 +347,18 @@ export const PlaylistStock = () => {
           </div>
         </div>
 
-        {/* Scrollable Song List in Current Playlist */}
+        {/* Scrollable Song List */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-          {(!currentSelectedPlaylist || !currentSelectedPlaylist.tracks || currentSelectedPlaylist.tracks.length === 0) ? (
+          {displayedTracks.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '16px 8px', color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: '0.7rem', margin: 'auto 0' }}>
-              No tracks in "{currentSelectedPlaylist?.name || 'Playlist'}".<br />
-              Browse Media Stock on the right and click <strong>[+ ADD]</strong> to add songs!
+              {isViewingAll ? (
+                <>No songs in universal library.<br />Offload audio/video files on the right to start!</>
+              ) : (
+                <>No tracks in this playlist yet.<br />Click <strong>[+ ADD]</strong> on any song in ALL to add it here!</>
+              )}
             </div>
           ) : (
-            sortedPlaylistTracks.map((track, idx) => {
+            displayedTracks.map((track, idx) => {
               const isCurrent = playbackState.currentMedia?.path === track.path || playbackState.currentMedia?.id === track.id;
 
               return (
@@ -313,22 +375,25 @@ export const PlaylistStock = () => {
                     gap: '4px'
                   }}
                 >
-                  {/* Track Number, Title & Play on click */}
+                  {/* Track Thumbnail, Number, Title & Play on click */}
                   <div 
-                    onClick={() => playMedia(track, currentSelectedPlaylist.id)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, cursor: 'pointer' }}
+                    onClick={() => playMedia(track, isViewingAll ? null : currentSelectedPlaylist?.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0, cursor: 'pointer' }}
                   >
-                    <span style={{ fontSize: '0.65rem', fontFamily: 'var(--mono)', color: isCurrent ? 'var(--red-ember)' : 'var(--text3)', fontWeight: '700', width: '14px', flexShrink: 0 }}>
+                    <span style={{ fontSize: '0.62rem', fontFamily: 'var(--mono)', color: isCurrent ? 'var(--red-ember)' : 'var(--text3)', fontWeight: '700', width: '14px', flexShrink: 0 }}>
                       {String(idx + 1).padStart(2, '0')}
                     </span>
+                    
+                    <TrackThumbnail track={track} isPlaying={isCurrent && isPlaying} size={20} />
+
                     <span style={{ fontSize: '0.72rem', color: isCurrent ? 'var(--red-ember)' : 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: isCurrent ? '700' : 'normal' }}>
                       {track.title || track.originalname || track.name || track.filename}
                     </span>
                   </div>
 
-                  {/* Rearrange Arrows (Enabled in Custom Order) & Remove */}
+                  {/* Actions */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0 }}>
-                    {sortBy === 'custom' && (
+                    {!isViewingAll && sortBy === 'custom' && (
                       <>
                         <button 
                           onClick={() => handleMoveTrack(currentSelectedPlaylist.id, idx, -1)}
@@ -340,8 +405,8 @@ export const PlaylistStock = () => {
                         </button>
                         <button 
                           onClick={() => handleMoveTrack(currentSelectedPlaylist.id, idx, 1)}
-                          disabled={idx === sortedPlaylistTracks.length - 1}
-                          style={{ padding: '1px 2px', background: 'transparent', border: 'none', color: idx === sortedPlaylistTracks.length - 1 ? 'var(--text3)' : 'var(--text2)', cursor: idx === sortedPlaylistTracks.length - 1 ? 'default' : 'pointer' }}
+                          disabled={idx === displayedTracks.length - 1}
+                          style={{ padding: '1px 2px', background: 'transparent', border: 'none', color: idx === displayedTracks.length - 1 ? 'var(--text3)' : 'var(--text2)', cursor: idx === displayedTracks.length - 1 ? 'default' : 'pointer' }}
                           title="Move Track Down"
                         >
                           <ChevronDown size={12} />
@@ -352,18 +417,20 @@ export const PlaylistStock = () => {
                     <button 
                       onClick={() => setHoverTargetTrack(track)}
                       style={{ padding: '1px 2px', background: 'transparent', border: 'none', color: 'var(--amber)' }}
-                      title="Add to another playlist..."
+                      title="Add to playlist..."
                     >
                       <Layers size={11} />
                     </button>
 
-                    <button 
-                      onClick={() => removeTrackFromPlaylist(currentSelectedPlaylist.id, track.id || track.path)}
-                      style={{ padding: '1px 2px', background: 'transparent', border: 'none', color: 'var(--text3)' }}
-                      title="Remove from this playlist"
-                    >
-                      <X size={11} />
-                    </button>
+                    {!isViewingAll && (
+                      <button 
+                        onClick={() => removeTrackFromPlaylist(currentSelectedPlaylist.id, track.id || track.path)}
+                        style={{ padding: '1px 2px', background: 'transparent', border: 'none', color: 'var(--text3)' }}
+                        title="Remove from this playlist"
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -372,18 +439,18 @@ export const PlaylistStock = () => {
         </div>
       </div>
 
-      {/* RIGHT COLUMN: MEDIA STOCK VAULT & PLAYLIST MANAGERS */}
+      {/* RIGHT COLUMN: UNIVERSAL 'ALL' MUSIC & PLAYLISTS MANAGER */}
       <div className="panel-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 10px' }}>
         
-        {/* Top Tab Switcher: Concise buttons that fit cleanly without clipping */}
+        {/* Top Tab Switcher */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0, gap: '4px' }}>
           <div style={{ display: 'flex', gap: '2px', background: 'var(--bg)', border: '1px solid var(--border)', padding: '1px', borderRadius: 'var(--radius-sm)' }}>
             <button 
-              onClick={() => setRightTab('stock')} 
-              className={rightTab === 'stock' ? 'btn-primary' : ''}
+              onClick={() => setRightTab('all')} 
+              className={rightTab === 'all' ? 'btn-primary' : ''}
               style={{ padding: '2px 6px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '3px' }}
             >
-              <Music size={10} /> STOCK ({validStockMedia.length})
+              <Music size={10} /> ALL ({validStockMedia.length})
             </button>
             <button 
               onClick={() => setRightTab('playlists')} 
@@ -410,47 +477,57 @@ export const PlaylistStock = () => {
           </div>
         )}
 
-        {/* TAB 1: MEDIA STOCK VAULT */}
-        {rightTab === 'stock' ? (
+        {/* TAB 1: ALL SONGS */}
+        {rightTab === 'all' ? (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' }}>
               {validStockMedia.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '16px 8px', color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: '0.7rem' }}>
-                  No media files in vault.<br />Offload files below to populate media stock!
+                  No songs in library.<br />Offload audio/video files below to populate universal music!
                 </div>
               ) : (
-                validStockMedia.map(item => (
-                  <div 
-                    key={item.id || item.path}
-                    style={{
-                      background: 'var(--bg)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '4px 6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '4px'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}>
-                      {item.type === 'video' ? <Film size={11} style={{ color: 'var(--red-ember)', flexShrink: 0 }} /> : <Music size={11} style={{ color: 'var(--amber)', flexShrink: 0 }} />}
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.originalname || item.filename || item.name}
-                      </span>
-                    </div>
+                validStockMedia.map(item => {
+                  const isCurrent = playbackState.currentMedia?.path === item.path || playbackState.currentMedia?.id === item.id;
 
-                    {/* Button with single plus icon */}
-                    <button 
-                      onClick={() => setHoverTargetTrack(item)}
-                      className="btn-amber"
-                      style={{ padding: '2px 6px', fontSize: '0.62rem', display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
-                      title="Choose which playlist to put this song in"
+                  return (
+                    <div 
+                      key={item.id || item.path}
+                      style={{
+                        background: isCurrent ? 'var(--red-mute)' : 'var(--bg)',
+                        border: `1px solid ${isCurrent ? 'var(--red-ember)' : 'var(--border)'}`,
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '4px'
+                      }}
                     >
-                      <Plus size={10} /> ADD
-                    </button>
-                  </div>
-                ))
+                      {/* Play directly on click from ALL tab with thumbnail */}
+                      <div 
+                        onClick={() => playMedia(item, null)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0, cursor: 'pointer' }}
+                        title="Click to play this track"
+                      >
+                        <TrackThumbnail track={item} isPlaying={isCurrent && isPlaying} size={20} />
+
+                        <span style={{ fontSize: '0.72rem', color: isCurrent ? 'var(--red-ember)' : 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: isCurrent ? '700' : 'normal' }}>
+                          {item.originalname || item.filename || item.name}
+                        </span>
+                      </div>
+
+                      {/* Add button to put into any playlist */}
+                      <button 
+                        onClick={() => setHoverTargetTrack(item)}
+                        className="btn-amber"
+                        style={{ padding: '2px 6px', fontSize: '0.62rem', display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}
+                        title="Add this song to a playlist"
+                      >
+                        <Plus size={10} /> ADD
+                      </button>
+                    </div>
+                  );
+                })
               )}
             </div>
 
@@ -485,7 +562,7 @@ export const PlaylistStock = () => {
           /* TAB 2: PLAYLISTS OVERVIEW & SELECTOR */
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {playlists.map(pl => {
-              const isSelected = currentSelectedPlaylist?.id === pl.id;
+              const isSelected = selectedPlaylistId === pl.id;
               const isActive = activePlaylistId === pl.id;
 
               return (
@@ -539,7 +616,7 @@ export const PlaylistStock = () => {
         )}
       </div>
 
-      {/* HOVERING WINDOW MODAL: ADD TRACK TO PLAYLIST OF CHOICE */}
+      {/* HOVERING WINDOW MODAL */}
       {hoverTargetTrack && (
         <div 
           onClick={() => setHoverTargetTrack(null)}
@@ -584,23 +661,22 @@ export const PlaylistStock = () => {
               </button>
             </div>
 
-            {/* Target Song Title banner - Fixed line-height and height */}
+            {/* Target Song Title banner with Thumbnail */}
             <div style={{ 
               background: 'var(--bg2)', 
               border: '1px solid var(--border)', 
               borderRadius: 'var(--radius-sm)', 
               padding: '5px 8px', 
-              fontSize: '0.72rem', 
-              lineHeight: '1.3',
-              color: 'var(--red-ember)', 
-              fontWeight: '700', 
               marginBottom: '8px', 
-              whiteSpace: 'nowrap', 
-              overflow: 'hidden', 
-              textOverflow: 'ellipsis',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
               flexShrink: 0
             }}>
-              {hoverTargetTrack.title || hoverTargetTrack.originalname || hoverTargetTrack.name || hoverTargetTrack.filename}
+              <TrackThumbnail track={hoverTargetTrack} size={24} />
+              <div style={{ fontSize: '0.72rem', color: 'var(--red-ember)', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+                {hoverTargetTrack.title || hoverTargetTrack.originalname || hoverTargetTrack.name || hoverTargetTrack.filename}
+              </div>
             </div>
 
             <div style={{ fontSize: '0.65rem', color: 'var(--text2)', marginBottom: '4px', fontFamily: 'var(--mono)', flexShrink: 0 }}>
@@ -713,7 +789,7 @@ export const PlaylistStock = () => {
             }}
           >
             <div style={{ fontSize: '0.85rem', fontFamily: 'var(--mono)', fontWeight: '700', color: 'var(--text)', marginBottom: '10px' }}>
-              CREATE NEW PLAYLIST STOCK
+              CREATE NEW PLAYLIST
             </div>
             <form onSubmit={(e) => { e.preventDefault(); handleCreatePlaylist(newPlaylistName); }}>
               <div style={{ marginBottom: '12px' }}>

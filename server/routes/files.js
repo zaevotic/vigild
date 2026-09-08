@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import * as mm from 'music-metadata';
 import { db } from '../db.js';
 import { resolveStoragePath } from './system.js';
 
@@ -54,7 +55,10 @@ function getPosixPermissions(stats) {
   return `${isDir}${owner}${group}${others}`;
 }
 
-// Helper to build a recursive file tree structure with real permissions
+// In-memory cover art cache
+const coverCache = new Map();
+
+// Helper to build a recursive file tree structure with real permissions & cover info
 function buildFileTree(dirPath, relativePath = '') {
   if (!fs.existsSync(dirPath)) return [];
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -86,7 +90,11 @@ function buildFileTree(dirPath, relativePath = '') {
         let fileType = 'other';
         if (['.mp4', '.mkv', '.webm', '.avi', '.mov'].includes(ext)) fileType = 'video';
         else if (['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac'].includes(ext)) fileType = 'audio';
-        else if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) fileType = 'image';
+        else if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'].includes(ext)) fileType = 'image';
+
+        const coverUrl = (fileType === 'audio' || fileType === 'video')
+          ? `/api/files/cover?path=${encodeURIComponent(entryRelPath)}`
+          : (fileType === 'image' ? `/uploads/${entryRelPath}` : null);
 
         return {
           id: entryRelPath,
@@ -99,7 +107,8 @@ function buildFileTree(dirPath, relativePath = '') {
           isDir: false,
           permissions,
           uploadDate: stats.mtime.toISOString(),
-          url: `/uploads/${entryRelPath}`
+          url: `/uploads/${entryRelPath}`,
+          coverUrl
         };
       }
     } catch (e) {
@@ -107,6 +116,81 @@ function buildFileTree(dirPath, relativePath = '') {
     }
   }).filter(Boolean);
 }
+
+// Endpoint to extract & serve embedded ID3/MP4/FLAC album artwork or companion image
+router.get('/cover', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).send('Path is required');
+
+  const rootDir = resolveStoragePath();
+  const decodedPath = decodeURIComponent(filePath).replace(/^file_|^dir_/, '');
+  const fullPath = path.join(rootDir, decodedPath);
+
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).send('File not found');
+  }
+
+  // Check cache first
+  if (coverCache.has(fullPath)) {
+    const cached = coverCache.get(fullPath);
+    if (cached === null) {
+      return res.status(404).send('No cover art found');
+    }
+    res.set('Content-Type', cached.format || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=86400');
+    return res.send(cached.data);
+  }
+
+  try {
+    const ext = path.extname(fullPath).toLowerCase();
+    
+    // If it's an audio file, parse ID3 / Vorbis / MP4 tags
+    if (['.mp3', '.m4a', '.flac', '.ogg', '.wav', '.aac', '.mp4'].includes(ext)) {
+      const metadata = await mm.parseFile(fullPath, { skipCovers: false });
+      const pictures = metadata.common?.picture;
+
+      if (pictures && pictures.length > 0) {
+        const cover = mm.selectCover(pictures) || pictures[0];
+        coverCache.set(fullPath, { format: cover.format, data: cover.data });
+        res.set('Content-Type', cover.format || 'image/jpeg');
+        res.set('Cache-Control', 'public, max-age=86400');
+        return res.send(cover.data);
+      }
+    }
+
+    // Check companion image in same directory (e.g., cover.jpg, folder.jpg, song_name.jpg)
+    const dir = path.dirname(fullPath);
+    const base = path.basename(fullPath, ext);
+    const companionCandidates = [
+      path.join(dir, `${base}.jpg`),
+      path.join(dir, `${base}.png`),
+      path.join(dir, `${base}.webp`),
+      path.join(dir, 'cover.jpg'),
+      path.join(dir, 'cover.png'),
+      path.join(dir, 'folder.jpg'),
+      path.join(dir, 'folder.png')
+    ];
+
+    for (const comp of companionCandidates) {
+      if (fs.existsSync(comp)) {
+        const compData = fs.readFileSync(comp);
+        const compExt = path.extname(comp).toLowerCase();
+        const mime = compExt === '.png' ? 'image/png' : (compExt === '.webp' ? 'image/webp' : 'image/jpeg');
+        coverCache.set(fullPath, { format: mime, data: compData });
+        res.set('Content-Type', mime);
+        res.set('Cache-Control', 'public, max-age=86400');
+        return res.send(compData);
+      }
+    }
+
+    // No cover found
+    coverCache.set(fullPath, null);
+    return res.status(404).send('No cover art found');
+  } catch (err) {
+    coverCache.set(fullPath, null);
+    return res.status(404).send('Error parsing cover art: ' + err.message);
+  }
+});
 
 // Get list of storage files (tree or list format)
 router.get('/', (req, res) => {
@@ -166,42 +250,62 @@ router.post('/folder', (req, res) => {
   }
 });
 
-// Upload file to SD card storage
-router.post('/upload', upload.single('mediaFile'), (req, res) => {
-  if (!req.file) {
+// Upload file(s) to SD card storage (supports single or multiple files)
+router.post('/upload', upload.any(), async (req, res) => {
+  const uploadedFiles = req.files || (req.file ? [req.file] : []);
+  if (!uploadedFiles || uploadedFiles.length === 0) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
-  const { originalname, filename, mimetype, size } = req.file;
-  const relFolder = req.query.folder || '';
-  const relPath = relFolder ? `${relFolder}/${filename}` : filename;
+  const relFolder = req.query.folder || req.body.folder || '';
+  const newItems = [];
 
-  let fileType = 'other';
-  if (mimetype.startsWith('video/')) fileType = 'video';
-  else if (mimetype.startsWith('audio/')) fileType = 'audio';
-  else if (mimetype.startsWith('image/')) fileType = 'image';
+  for (const file of uploadedFiles) {
+    const { originalname, filename, mimetype, size } = file;
+    const relPath = relFolder ? `${relFolder}/${filename}` : filename;
 
-  const newItem = {
-    id: relPath,
-    originalname: filename,
-    filename,
-    path: relPath,
-    mimetype,
-    size,
-    type: fileType,
-    uploadDate: new Date().toISOString(),
-    url: `/uploads/${relPath}`
-  };
+    let fileType = 'other';
+    const ext = path.extname(filename).toLowerCase();
+    if (mimetype.startsWith('video/') || ['.mp4', '.mkv', '.webm', '.avi', '.mov'].includes(ext)) fileType = 'video';
+    else if (mimetype.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac'].includes(ext)) fileType = 'audio';
+    else if (mimetype.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'].includes(ext)) fileType = 'image';
+    else if (['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.log', '.sh', '.py', '.yml', '.yaml', '.pdf'].includes(ext)) fileType = 'text';
 
-  const mediaList = db.get('media') || [];
-  mediaList.unshift(newItem);
-  db.set('media', mediaList);
+    const coverUrl = (fileType === 'audio' || fileType === 'video')
+      ? `/api/files/cover?path=${encodeURIComponent(relPath)}`
+      : (fileType === 'image' ? `/uploads/${relPath}` : null);
 
-  if (req.app.get('wssBroadcast')) {
-    req.app.get('wssBroadcast')('MEDIA_UPDATED', mediaList);
+    const newItem = {
+      id: relPath,
+      originalname: filename,
+      filename,
+      path: relPath,
+      mimetype,
+      size,
+      type: fileType,
+      uploadDate: new Date().toISOString(),
+      url: `/uploads/${relPath}`,
+      coverUrl
+    };
+
+    newItems.push(newItem);
   }
 
-  res.json({ success: true, file: newItem });
+  const mediaList = db.get('media') || [];
+  // Prepend all new items
+  const updatedMedia = [...newItems, ...mediaList];
+  db.set('media', updatedMedia);
+
+  if (req.app.get('wssBroadcast')) {
+    req.app.get('wssBroadcast')('MEDIA_UPDATED', updatedMedia);
+  }
+
+  res.json({
+    success: true,
+    count: newItems.length,
+    file: newItems[0],
+    files: newItems
+  });
 });
 
 // Rename file or directory
@@ -226,6 +330,9 @@ router.post('/rename', (req, res) => {
   try {
     fs.renameSync(oldFullPath, newFullPath);
 
+    // Invalidate cover cache
+    coverCache.delete(oldFullPath);
+
     // Update media database if applicable
     const mediaList = db.get('media') || [];
     let updated = false;
@@ -236,6 +343,7 @@ router.post('/rename', (req, res) => {
         item.originalname = newName.trim();
         item.id = newRelPath;
         item.url = `/uploads/${newRelPath}`;
+        item.coverUrl = `/api/files/cover?path=${encodeURIComponent(newRelPath)}`;
         updated = true;
       }
     });
@@ -265,6 +373,9 @@ const handleDelete = (req, res) => {
   const rootDir = resolveStoragePath();
   const decodedPath = decodeURIComponent(targetPath).replace(/^file_|^dir_/, '');
   const fullPath = path.join(rootDir, decodedPath);
+
+  // Invalidate cover cache
+  coverCache.delete(fullPath);
 
   const mediaList = db.get('media') || [];
   const updatedMedia = mediaList.filter(item => item.path !== decodedPath && item.id !== decodedPath && item.filename !== decodedPath);

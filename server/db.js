@@ -34,6 +34,28 @@ const defaultData = {
       createdAt: new Date().toISOString()
     }
   ],
+  tasks: [
+    {
+      id: 'task_1',
+      title: 'Initialize DashMob Workstation Hub',
+      description: 'Setup desk dock screen & WiFi connection',
+      completed: true,
+      priority: 'high',
+      category: 'SETUP',
+      dueDate: '',
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 'task_2',
+      title: 'Organize SD Card Storage Vault',
+      description: 'Categorize media files into playlist folders',
+      completed: false,
+      priority: 'medium',
+      category: 'MEDIA',
+      dueDate: '',
+      createdAt: new Date().toISOString()
+    }
+  ],
   playbackState: {
     currentMedia: null,
     isPlaying: false,
