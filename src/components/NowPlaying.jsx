@@ -117,6 +117,14 @@ export const NowPlaying = () => {
     displaySong = parts.slice(1).join(' - ').trim();
   }
 
+  const activeQueueList = shuffle
+    ? (playbackState.shuffledQueue && playbackState.shuffledQueue.length > 0 ? playbackState.shuffledQueue : validMediaList)
+    : (playbackState.originalQueue && playbackState.originalQueue.length > 0 ? playbackState.originalQueue : validMediaList);
+  const queueTotal = activeQueueList.length;
+  const currentTrackNum = (playbackState.queueIndex !== undefined && playbackState.queueIndex !== null)
+    ? Math.min(queueTotal, Math.max(1, playbackState.queueIndex + 1))
+    : 1;
+
   return (
     <div className="panel-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '10px 12px' }}>
       {/* Header */}
@@ -130,6 +138,15 @@ export const NowPlaying = () => {
           <h2 style={{ fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--text)', whiteSpace: 'nowrap' }}>
             NOW PLAYING
           </h2>
+          {currentMedia && queueTotal > 0 && (
+            <span 
+              className="badge font-mono" 
+              style={{ fontSize: '0.58rem', padding: '1px 5px', background: 'var(--bg3)', color: 'var(--text2)', borderColor: 'var(--border2)' }}
+              title={shuffle ? `Track ${currentTrackNum} of ${queueTotal} (Randomized queue preserved)` : `Track ${currentTrackNum} of ${queueTotal} (Sequential)`}
+            >
+              {currentTrackNum}/{queueTotal}{shuffle ? ' 🔀' : ''}
+            </span>
+          )}
         </div>
 
         {isVideo && currentMedia && (
@@ -287,16 +304,21 @@ export const NowPlaying = () => {
 
             {/* Transport Controls with Shuffle & Repeat Toggle */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
-              {/* Shuffle Toggle */}
+              {/* Shuffle Toggle (Dimmed when in global space, full ember in playlist) */}
               <button 
                 onClick={toggleShuffle} 
-                title={shuffle ? 'Shuffle ON' : 'Shuffle OFF'}
+                title={shuffle 
+                  ? (!playbackState.activePlaylistId ? 'Shuffle: ON (Global Pool - Dimmed)' : 'Shuffle: ON (Playlist Shuffled)')
+                  : 'Shuffle: OFF'}
                 style={{ 
                   padding: '5px 8px', 
-                  background: shuffle ? 'var(--red-mute)' : 'transparent', 
-                  border: `1px solid ${shuffle ? 'var(--red-ember)' : 'transparent'}`,
+                  background: shuffle ? (!playbackState.activePlaylistId ? 'rgba(217, 68, 50, 0.08)' : 'var(--red-mute)') : 'transparent', 
+                  border: `1px solid ${shuffle ? (!playbackState.activePlaylistId ? 'rgba(217, 68, 50, 0.3)' : 'var(--red-ember)') : 'transparent'}`,
                   borderRadius: 'var(--radius-sm)',
-                  color: shuffle ? 'var(--red-ember)' : 'var(--text3)' 
+                  color: shuffle ? (!playbackState.activePlaylistId ? 'rgba(217, 68, 50, 0.65)' : 'var(--red-ember)') : 'var(--text3)',
+                  opacity: shuffle && !playbackState.activePlaylistId ? 0.65 : 1,
+                  transition: 'all 0.2s ease',
+                  cursor: 'pointer'
                 }}
               >
                 <Shuffle size={14} />
@@ -328,19 +350,23 @@ export const NowPlaying = () => {
                 <SkipForward size={16} />
               </button>
 
-              {/* Repeat Toggle (OFF / REPEAT ALL / REPEAT ONE) */}
+              {/* Repeat Toggle (ON: repeats playlist / OFF: rolls into global music library) */}
               <button 
                 onClick={toggleRepeat} 
-                title={`Repeat Mode: ${repeat.toUpperCase()}`}
+                title={repeat && repeat !== 'off'
+                  ? 'Repeat: ON (Loops current playlist / queue)'
+                  : 'Repeat: OFF (Switches to Global Music when playlist ends)'}
                 style={{ 
                   padding: '5px 8px', 
-                  background: repeat !== 'off' ? 'var(--amber-warm-dim)' : 'transparent', 
-                  border: `1px solid ${repeat !== 'off' ? 'var(--amber-dim)' : 'transparent'}`,
+                  background: repeat && repeat !== 'off' ? 'var(--amber-warm-dim)' : 'transparent', 
+                  border: `1px solid ${repeat && repeat !== 'off' ? 'var(--amber-dim)' : 'transparent'}`,
                   borderRadius: 'var(--radius-sm)',
-                  color: repeat !== 'off' ? 'var(--amber)' : 'var(--text3)' 
+                  color: repeat && repeat !== 'off' ? 'var(--amber)' : 'var(--text3)',
+                  transition: 'all 0.2s ease',
+                  cursor: 'pointer'
                 }}
               >
-                {repeat === 'one' ? <Repeat1 size={14} /> : <Repeat size={14} />}
+                <Repeat size={14} />
               </button>
             </div>
           </div>

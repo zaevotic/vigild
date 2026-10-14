@@ -9,6 +9,13 @@ export const isMediaFile = (file) => {
   return /\.(mp4|mkv|webm|mov|avi|mp3|wav|ogg|m4a|flac|aac)$/i.test(name);
 };
 
+export const isAudioFile = (file) => {
+  if (!file) return false;
+  if (file.type === 'audio') return true;
+  const name = (file.filename || file.originalname || file.name || file.path || '').toLowerCase();
+  return /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(name);
+};
+
 export const DashboardProvider = ({ children }) => {
   const [alarms, setAlarms] = useState([]);
   const [activeAlarm, setActiveAlarm] = useState(null);
@@ -23,8 +30,34 @@ export const DashboardProvider = ({ children }) => {
     duration: 0,
     shuffle: false,
     repeat: 'off', // 'off' | 'all' | 'one'
-    activePlaylistId: null
+    activePlaylistId: null,
+    originalQueue: [],
+    shuffledQueue: [],
+    queueIndex: 0
   });
+  const [deviceRole, setDeviceRoleState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vigild_device_role');
+      if (saved === 'dock' || saved === 'client') return saved;
+      return 'dock';
+    } catch (e) {
+      return 'dock';
+    }
+  });
+
+  const setDeviceRole = (role) => {
+    if (role === 'dock' || role === 'client') {
+      setDeviceRoleState(role);
+      try {
+        localStorage.setItem('vigild_device_role', role);
+      } catch (e) {}
+    }
+  };
+
+  const toggleDeviceRole = () => {
+    const nextRole = deviceRole === 'dock' ? 'client' : 'dock';
+    setDeviceRole(nextRole);
+  };
   const [settings, setSettings] = useState({
     deviceName: 'Samsung M34 Desk Server',
     maxStorageGB: 128,
@@ -183,15 +216,28 @@ export const DashboardProvider = ({ children }) => {
     }
   };
 
+  // Helper to shuffle array with Fisher-Yates algorithm
+  const shuffleList = (list) => {
+    const arr = [...list];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+
   // Helper to get active track queue (active playlist tracks, or general media stock)
-  const getActiveQueue = () => {
-    if (playbackState.activePlaylistId) {
-      const activePl = playlists.find(p => p.id === playbackState.activePlaylistId);
+  const getActiveQueue = (playlistId = undefined) => {
+    const targetPlaylistId = playlistId !== undefined ? playlistId : playbackState.activePlaylistId;
+    if (targetPlaylistId) {
+      const activePl = playlists.find(p => p.id === targetPlaylistId);
       if (activePl && activePl.tracks && activePl.tracks.length > 0) {
         return activePl.tracks.filter(isMediaFile);
       }
     }
-    return (media || []).filter(isMediaFile);
+    // Global library: return all available music/audio tracks
+    const audioFiles = (media || []).filter(isAudioFile);
+    return audioFiles.length > 0 ? audioFiles : (media || []).filter(isMediaFile);
   };
 
   const playMedia = (mediaItem, playlistId = undefined) => {
@@ -203,11 +249,34 @@ export const DashboardProvider = ({ children }) => {
       console.warn('[Playback] Non-media file cannot be played:', mediaItem);
       return;
     }
+
+    const fullQueue = getActiveQueue(playlistId);
+    let originalQueue = fullQueue;
+    if (!originalQueue.some(m => m.id === mediaItem.id || m.path === mediaItem.path)) {
+      originalQueue = [mediaItem, ...originalQueue];
+    }
+
+    const isShuffle = playbackState.shuffle;
+    let shuffledQueue = playbackState.shuffledQueue || [];
+    let queueIndex = 0;
+
+    if (isShuffle) {
+      const remaining = originalQueue.filter(m => m.id !== mediaItem.id && m.path !== mediaItem.path);
+      shuffledQueue = [mediaItem, ...shuffleList(remaining)];
+      queueIndex = 0;
+    } else {
+      const idx = originalQueue.findIndex(m => m.id === mediaItem.id || m.path === mediaItem.path);
+      queueIndex = idx >= 0 ? idx : 0;
+    }
+
     sendPlaybackUpdate({
       currentMedia: mediaItem,
       isPlaying: true,
       currentTime: 0,
-      activePlaylistId: playlistId !== undefined ? playlistId : playbackState.activePlaylistId
+      activePlaylistId: playlistId !== undefined ? playlistId : playbackState.activePlaylistId,
+      originalQueue,
+      shuffledQueue,
+      queueIndex
     });
   };
 
@@ -217,11 +286,26 @@ export const DashboardProvider = ({ children }) => {
     if (validTracks.length === 0) return;
 
     const startTrack = validTracks[startIndex] || validTracks[0];
+    const isShuffle = playbackState.shuffle;
+    let shuffledQueue = [];
+    let queueIndex = 0;
+
+    if (isShuffle) {
+      const remaining = validTracks.filter(m => m.id !== startTrack.id && m.path !== startTrack.path);
+      shuffledQueue = [startTrack, ...shuffleList(remaining)];
+      queueIndex = 0;
+    } else {
+      queueIndex = startIndex >= 0 && startIndex < validTracks.length ? startIndex : 0;
+    }
+
     sendPlaybackUpdate({
       currentMedia: startTrack,
       isPlaying: true,
       currentTime: 0,
-      activePlaylistId: playlist.id
+      activePlaylistId: playlist.id,
+      originalQueue: validTracks,
+      shuffledQueue,
+      queueIndex
     });
   };
 
@@ -238,21 +322,47 @@ export const DashboardProvider = ({ children }) => {
   };
 
   const toggleShuffle = () => {
-    const newShuffle = !playbackState.shuffle;
-    sendPlaybackUpdate({ shuffle: newShuffle });
+    const nextShuffle = !playbackState.shuffle;
+    const currentMedia = playbackState.currentMedia;
+    const originalQueue = (playbackState.originalQueue && playbackState.originalQueue.length > 0)
+      ? playbackState.originalQueue
+      : getActiveQueue();
+
+    if (nextShuffle) {
+      let newShuffled = [];
+      if (currentMedia) {
+        const remaining = originalQueue.filter(m => m.id !== currentMedia.id && m.path !== currentMedia.path);
+        newShuffled = [currentMedia, ...shuffleList(remaining)];
+      } else {
+        newShuffled = shuffleList(originalQueue);
+      }
+      sendPlaybackUpdate({
+        shuffle: true,
+        originalQueue,
+        shuffledQueue: newShuffled,
+        queueIndex: 0
+      });
+    } else {
+      let origIdx = 0;
+      if (currentMedia) {
+        const idx = originalQueue.findIndex(m => m.id === currentMedia.id || m.path === currentMedia.path);
+        if (idx >= 0) origIdx = idx;
+      }
+      sendPlaybackUpdate({
+        shuffle: false,
+        originalQueue,
+        queueIndex: origIdx
+      });
+    }
   };
 
   const toggleRepeat = () => {
-    const modes = ['off', 'all', 'one'];
-    const currIdx = modes.indexOf(playbackState.repeat);
-    const nextMode = modes[(currIdx + 1) % modes.length];
-    sendPlaybackUpdate({ repeat: nextMode });
+    const isCurrentlyOn = playbackState.repeat && playbackState.repeat !== 'off';
+    const nextRepeat = isCurrentlyOn ? 'off' : 'all';
+    sendPlaybackUpdate({ repeat: nextRepeat });
   };
 
   const playNextMedia = (isAutoEnd = false) => {
-    const queue = getActiveQueue();
-    if (queue.length === 0) return;
-
     // Handle repeat one
     if (isAutoEnd && playbackState.repeat === 'one' && playbackState.currentMedia) {
       sendPlaybackUpdate({
@@ -262,49 +372,137 @@ export const DashboardProvider = ({ children }) => {
       return;
     }
 
-    // Handle shuffle
-    if (playbackState.shuffle) {
-      const candidates = queue.length > 1 
-        ? queue.filter(m => (m.id !== playbackState.currentMedia?.id && m.path !== playbackState.currentMedia?.path))
-        : queue;
-      const randomItem = candidates[Math.floor(Math.random() * candidates.length)];
-      playMedia(randomItem);
-      return;
-    }
+    const isShuffle = playbackState.shuffle;
+    const activeQueue = isShuffle
+      ? (playbackState.shuffledQueue && playbackState.shuffledQueue.length > 0 ? playbackState.shuffledQueue : getActiveQueue())
+      : (playbackState.originalQueue && playbackState.originalQueue.length > 0 ? playbackState.originalQueue : getActiveQueue());
 
-    // Sequential playback
-    const currentIndex = queue.findIndex(m => m.id === playbackState.currentMedia?.id || m.path === playbackState.currentMedia?.path);
+    if (!activeQueue || activeQueue.length === 0) return;
+
+    let currentIndex = playbackState.queueIndex !== undefined && playbackState.queueIndex !== null
+      ? playbackState.queueIndex
+      : activeQueue.findIndex(m => m.id === playbackState.currentMedia?.id || m.path === playbackState.currentMedia?.path);
+
+    if (currentIndex < 0) currentIndex = 0;
     const nextIndex = currentIndex + 1;
 
-    if (nextIndex >= queue.length) {
-      if (playbackState.repeat === 'all') {
-        playMedia(queue[0]);
-      } else if (isAutoEnd) {
-        sendPlaybackUpdate({ isPlaying: false, currentTime: 0 });
-      } else {
-        playMedia(queue[0]);
+    // Check if end of active queue is reached
+    if (nextIndex >= activeQueue.length) {
+      const isPlaylistActive = !!playbackState.activePlaylistId;
+      const isRepeatOn = playbackState.repeat && playbackState.repeat !== 'off';
+
+      if (isPlaylistActive && !isRepeatOn) {
+        // PLAYLIST FINISHED & REPEAT IS OFF -> SWITCH TO GLOBAL MUSIC
+        const globalMusic = (media || []).filter(isAudioFile);
+        const targetGlobal = globalMusic.length > 0 ? globalMusic : (media || []).filter(isMediaFile);
+
+        if (targetGlobal.length > 0) {
+          let newShuffled = [];
+          let startTrack = targetGlobal[0];
+
+          if (isShuffle) {
+            newShuffled = shuffleList(targetGlobal);
+            startTrack = newShuffled[0];
+          }
+
+          sendPlaybackUpdate({
+            activePlaylistId: null, // Switch to global library
+            currentMedia: startTrack,
+            isPlaying: true,
+            currentTime: 0,
+            originalQueue: targetGlobal,
+            shuffledQueue: isShuffle ? newShuffled : [],
+            queueIndex: 0
+          });
+          return;
+        }
+      }
+
+      // If REPEAT is ON: loop the active queue
+      if (isRepeatOn) {
+        sendPlaybackUpdate({
+          currentMedia: activeQueue[0],
+          isPlaying: true,
+          currentTime: 0,
+          queueIndex: 0
+        });
+        return;
+      }
+
+      // If already in GLOBAL space and REPEAT is OFF:
+      if (!isPlaylistActive && !isRepeatOn) {
+        if (isAutoEnd) {
+          if (isShuffle) {
+            // Keep the ambient stream rolling in global space if shuffle is active
+            const reShuffled = shuffleList(activeQueue);
+            sendPlaybackUpdate({
+              currentMedia: reShuffled[0],
+              isPlaying: true,
+              currentTime: 0,
+              shuffledQueue: reShuffled,
+              queueIndex: 0
+            });
+          } else {
+            sendPlaybackUpdate({ isPlaying: false, currentTime: 0, queueIndex: 0 });
+          }
+        } else {
+          sendPlaybackUpdate({
+            currentMedia: activeQueue[0],
+            isPlaying: true,
+            currentTime: 0,
+            queueIndex: 0
+          });
+        }
+        return;
       }
     } else {
-      playMedia(queue[nextIndex]);
+      sendPlaybackUpdate({
+        currentMedia: activeQueue[nextIndex],
+        isPlaying: true,
+        currentTime: 0,
+        queueIndex: nextIndex
+      });
     }
   };
 
   const playPrevMedia = () => {
-    const queue = getActiveQueue();
-    if (queue.length === 0) return;
-
-    if (playbackState.shuffle) {
-      const candidates = queue.length > 1 
-        ? queue.filter(m => (m.id !== playbackState.currentMedia?.id && m.path !== playbackState.currentMedia?.path))
-        : queue;
-      const randomItem = candidates[Math.floor(Math.random() * candidates.length)];
-      playMedia(randomItem);
+    // If track has been playing for more than 3 seconds, restart it
+    if (playbackState.currentTime > 3) {
+      sendPlaybackUpdate({
+        currentTime: 0,
+        isPlaying: true
+      });
       return;
     }
 
-    const currentIndex = queue.findIndex(m => m.id === playbackState.currentMedia?.id || m.path === playbackState.currentMedia?.path);
-    const prevIndex = (currentIndex - 1 + queue.length) % queue.length;
-    playMedia(queue[prevIndex]);
+    const isShuffle = playbackState.shuffle;
+    const activeQueue = isShuffle
+      ? (playbackState.shuffledQueue && playbackState.shuffledQueue.length > 0 ? playbackState.shuffledQueue : getActiveQueue())
+      : (playbackState.originalQueue && playbackState.originalQueue.length > 0 ? playbackState.originalQueue : getActiveQueue());
+
+    if (!activeQueue || activeQueue.length === 0) return;
+
+    let currentIndex = playbackState.queueIndex !== undefined && playbackState.queueIndex !== null
+      ? playbackState.queueIndex
+      : activeQueue.findIndex(m => m.id === playbackState.currentMedia?.id || m.path === playbackState.currentMedia?.path);
+
+    if (currentIndex <= 0) {
+      const prevIndex = activeQueue.length - 1;
+      sendPlaybackUpdate({
+        currentMedia: activeQueue[prevIndex],
+        isPlaying: true,
+        currentTime: 0,
+        queueIndex: prevIndex
+      });
+    } else {
+      const prevIndex = currentIndex - 1;
+      sendPlaybackUpdate({
+        currentMedia: activeQueue[prevIndex],
+        isPlaying: true,
+        currentTime: 0,
+        queueIndex: prevIndex
+      });
+    }
   };
 
   // Playlist management actions
@@ -386,7 +584,10 @@ export const DashboardProvider = ({ children }) => {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks(prev => [data.task, ...prev]);
+        setTasks(prev => {
+          if (prev.some(t => t.id === data.task.id)) return prev;
+          return [...prev, data.task];
+        });
       }
       return data;
     } catch (err) {
@@ -589,7 +790,10 @@ export const DashboardProvider = ({ children }) => {
       deleteMedia,
       updateSettings,
       refreshAllData,
-      fetchTones
+      fetchTones,
+      deviceRole,
+      setDeviceRole,
+      toggleDeviceRole
     }}>
       {children}
     </DashboardContext.Provider>

@@ -3,22 +3,23 @@ import { useDashboard } from '../context/DashboardContext';
 import { AlertTriangle } from 'lucide-react';
 
 export const GlobalAlarmRinger = () => {
-  const { activeAlarm, snoozeAlarm, dismissAlarm } = useDashboard();
+  const { activeAlarm, snoozeAlarm, dismissAlarm, deviceRole } = useDashboard();
   const audioCtxRef = useRef(null);
   const synthTimerRef = useRef(null);
   const audioFileRef = useRef(null);
 
-  // Audio tone player handler when alarm triggers globally
+  // Audio tone player handler when alarm triggers globally (DOCK ONLY)
   useEffect(() => {
-    if (activeAlarm) {
+    if (activeAlarm && deviceRole === 'dock') {
       startAlarmPlayback();
     } else {
       stopAlarmPlayback();
     }
     return () => stopAlarmPlayback();
-  }, [activeAlarm]);
+  }, [activeAlarm, deviceRole]);
 
   const startAlarmPlayback = () => {
+    if (deviceRole === 'client') return;
     if (audioFileRef.current) {
       audioFileRef.current.currentTime = 0;
       audioFileRef.current.play().catch(err => {
@@ -39,6 +40,7 @@ export const GlobalAlarmRinger = () => {
   };
 
   const startSynthAlarmSound = () => {
+    if (deviceRole === 'client') return;
     try {
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -80,6 +82,56 @@ export const GlobalAlarmRinger = () => {
 
   if (!activeAlarm) return null;
 
+  // On remote client (laptop / PC): render a quiet floating notification banner without hijacking the screen or blasting sound
+  if (deviceRole === 'client') {
+    return (
+      <div style={{
+        position: 'fixed',
+        top: '12px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 99999,
+        background: 'var(--bg1)',
+        border: '2px solid var(--red-ember)',
+        borderRadius: 'var(--radius-md)',
+        padding: '8px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        boxShadow: 'var(--shadow-ember)',
+        fontFamily: 'var(--mono)',
+        animation: 'pulse 2s infinite'
+      }}>
+        <AlertTriangle size={18} style={{ color: 'var(--red-ember)', flexShrink: 0 }} />
+        <div>
+          <div style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text)' }}>
+            DOCK ALARM RINGING • <span style={{ color: 'var(--red-ember)' }}>{activeAlarm.time}</span>
+          </div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--text2)' }}>
+            {activeAlarm.label || 'Scheduled Alarm'} (Silent on remote client)
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', marginLeft: '6px' }}>
+          <button
+            onClick={snoozeAlarm}
+            className="btn-amber"
+            style={{ fontSize: '0.68rem', padding: '3px 8px' }}
+          >
+            SNOOZE (5M)
+          </button>
+          <button
+            onClick={dismissAlarm}
+            className="btn-primary"
+            style={{ fontSize: '0.68rem', padding: '3px 8px' }}
+          >
+            DISMISS
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // On Dock Station (Samsung phone on desk): loud alarm and full screen takeover
   return (
     <div style={{
       position: 'fixed',

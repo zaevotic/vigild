@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDashboard } from '../context/DashboardContext';
+import { uploadFileInChunks } from '../utils/chunkUploader';
 import { HardDrive, Trash2, Upload, RefreshCw, Folder, FolderOpen, FileText, Film, Music, ChevronRight, FolderPlus, List, GitFork, Edit3, X, Download, Eye, Image as ImageIcon, Disc } from 'lucide-react';
 
 function formatTerminalSize(bytes) {
@@ -34,6 +35,8 @@ export const StorageDirectoryPanel = () => {
   const [currentPath, setCurrentPath] = useState('');
   const [expandedFolders, setExpandedFolders] = useState({ 'root': true });
   const [uploading, setUploading] = useState(false);
+  const [uploadCount, setUploadCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   
@@ -91,7 +94,6 @@ export const StorageDirectoryPanel = () => {
   }, [previewItem]);
 
   const [toastMessage, setToastMessage] = useState('');
-  const [uploadCount, setUploadCount] = useState(0);
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -104,27 +106,39 @@ export const StorageDirectoryPanel = () => {
 
     setUploading(true);
     setUploadCount(files.length);
-    const formData = new FormData();
+
+    let successCount = 0;
+
     for (let i = 0; i < files.length; i++) {
-      formData.append('mediaFiles', files[i]);
+      const file = files[i];
+      try {
+        await uploadFileInChunks(file, {
+          folder: currentPath,
+          onProgress: (p) => {
+            setUploadProgress({
+              fileName: file.name,
+              fileIndex: i + 1,
+              totalFiles: files.length,
+              ...p
+            });
+          }
+        });
+        successCount++;
+      } catch (err) {
+        console.error('[Upload Error]', err);
+        showToast(`Error offloading ${file.name}: ${err.message}`);
+      }
     }
 
-    try {
-      const res = await fetch(`/api/files/upload?folder=${encodeURIComponent(currentPath)}`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      await refreshAllData();
-      await fetchTree();
-      showToast(`Offloaded ${data.count || files.length} file(s) to SD Card`);
-    } catch (err) {
-      console.error('[Upload Error]', err);
-      showToast('Error uploading file(s)');
-    } finally {
-      setUploading(false);
-      setUploadCount(0);
-      if (e.target) e.target.value = '';
+    setUploadProgress(null);
+    setUploading(false);
+    setUploadCount(0);
+    if (e.target) e.target.value = '';
+
+    await refreshAllData();
+    await fetchTree();
+    if (successCount > 0) {
+      showToast(`Offloaded ${successCount} file(s) to SD Card (verified)`);
     }
   };
 
@@ -450,6 +464,44 @@ export const StorageDirectoryPanel = () => {
           fontFamily: 'var(--mono)'
         }}>
           {toastMessage}
+        </div>
+      )}
+
+      {/* Resumable Chunked Upload Progress Banner */}
+      {uploadProgress && (
+        <div style={{
+          background: 'var(--bg2)',
+          border: '1px solid var(--amber)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '6px 10px',
+          marginBottom: '6px',
+          fontFamily: 'var(--mono)',
+          fontSize: '0.68rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+          boxShadow: 'var(--shadow-ember)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: 'var(--amber)', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%' }}>
+              ⚡ {uploadProgress.fileName} ({uploadProgress.fileIndex}/{uploadProgress.totalFiles})
+            </span>
+            <span style={{ color: 'var(--text2)', fontSize: '0.62rem' }}>
+              {uploadProgress.status === 'resuming' ? 'RESUMING PIECES' : uploadProgress.status === 'assembling' ? 'ASSEMBLING' : 'OFFLOADING'} • {uploadProgress.percent}%
+            </span>
+          </div>
+          <div style={{ width: '100%', height: '5px', background: 'var(--bg)', borderRadius: '2px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+            <div style={{
+              width: `${uploadProgress.percent}%`,
+              height: '100%',
+              background: 'var(--amber)',
+              transition: 'width 0.2s ease'
+            }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text3)', fontSize: '0.6rem' }}>
+            <span>{formatTerminalSize(uploadProgress.transferred)} / {formatTerminalSize(uploadProgress.total)}</span>
+            <span>PIECE {uploadProgress.currentChunk}/{uploadProgress.totalChunks}</span>
+          </div>
         </div>
       )}
 

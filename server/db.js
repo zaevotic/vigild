@@ -63,7 +63,10 @@ const defaultData = {
     duration: 0,
     shuffle: false,
     repeat: 'off',
-    activePlaylistId: null
+    activePlaylistId: null,
+    originalQueue: [],
+    shuffledQueue: [],
+    queueIndex: 0
   },
   settings: {
     deviceName: 'Samsung M34 Desk Server',

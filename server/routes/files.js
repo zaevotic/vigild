@@ -43,6 +43,27 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+// Chunk storage engine for resumable / torrent-style uploads
+const chunkStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadId = req.query.uploadId || req.body.uploadId;
+    if (!uploadId) return cb(new Error('uploadId is required'));
+    const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const rootDir = resolveStoragePath();
+    const chunkDir = path.join(rootDir, '.chunks', safeUploadId);
+    if (!fs.existsSync(chunkDir)) {
+      fs.mkdirSync(chunkDir, { recursive: true });
+    }
+    cb(null, chunkDir);
+  },
+  filename: (req, file, cb) => {
+    const chunkIndex = req.query.chunkIndex !== undefined ? req.query.chunkIndex : req.body.chunkIndex;
+    cb(null, `chunk_${chunkIndex}.part`);
+  }
+});
+const uploadChunk = multer({ storage: chunkStorage });
+
 const router = express.Router();
 
 // Helper to format actual POSIX file permissions
@@ -61,7 +82,8 @@ const coverCache = new Map();
 // Helper to build a recursive file tree structure with real permissions & cover info
 function buildFileTree(dirPath, relativePath = '') {
   if (!fs.existsSync(dirPath)) return [];
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter(entry => !entry.name.startsWith('.'));
 
   return entries.map(entry => {
     const entryRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
@@ -306,6 +328,149 @@ router.post('/upload', upload.any(), async (req, res) => {
     file: newItems[0],
     files: newItems
   });
+});
+
+// GET /upload/status - Check which pieces of a resumable upload have already been received
+router.get('/upload/status', (req, res) => {
+  const { uploadId } = req.query;
+  if (!uploadId) return res.status(400).json({ error: 'uploadId is required' });
+
+  const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const rootDir = resolveStoragePath();
+  const chunkDir = path.join(rootDir, '.chunks', safeUploadId);
+
+  if (!fs.existsSync(chunkDir)) {
+    return res.json({ uploadedChunks: [], totalUploaded: 0 });
+  }
+
+  try {
+    const files = fs.readdirSync(chunkDir);
+    const uploadedChunks = files
+      .filter(f => f.startsWith('chunk_') && f.endsWith('.part'))
+      .map(f => parseInt(f.replace('chunk_', '').replace('.part', ''), 10))
+      .filter(n => !isNaN(n));
+    res.json({ uploadedChunks, totalUploaded: uploadedChunks.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /upload/chunk - Receive an individual slice of a file
+router.post('/upload/chunk', uploadChunk.single('chunk'), (req, res) => {
+  const uploadId = req.query.uploadId || req.body.uploadId;
+  const chunkIndex = req.query.chunkIndex !== undefined ? req.query.chunkIndex : req.body.chunkIndex;
+
+  if (!uploadId || chunkIndex === undefined) {
+    return res.status(400).json({ error: 'uploadId and chunkIndex are required' });
+  }
+
+  res.json({ success: true, chunkIndex: parseInt(chunkIndex, 10) });
+});
+
+// POST /upload/assemble - Concatenate all received chunks in order into the final file
+router.post('/upload/assemble', async (req, res) => {
+  const { uploadId, filename, totalChunks, folder = '', mimetype } = req.body;
+  if (!uploadId || !filename || !totalChunks) {
+    return res.status(400).json({ error: 'uploadId, filename, and totalChunks are required' });
+  }
+
+  const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const rootDir = resolveStoragePath();
+  const chunkDir = path.join(rootDir, '.chunks', safeUploadId);
+  const targetDir = path.join(rootDir, folder || '');
+
+  if (!fs.existsSync(chunkDir)) {
+    return res.status(400).json({ error: 'Chunk staging directory not found' });
+  }
+
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  // Verify all chunks exist before assembling
+  const numChunks = parseInt(totalChunks, 10);
+  for (let i = 0; i < numChunks; i++) {
+    const chunkFile = path.join(chunkDir, `chunk_${i}.part`);
+    if (!fs.existsSync(chunkFile)) {
+      return res.status(400).json({ error: `Missing chunk piece ${i} of ${numChunks}` });
+    }
+  }
+
+  // Preserve user filename with duplicate handling
+  let cleanName = path.basename(filename).replace(/[^a-zA-Z0-9.\-_ ()]/g, '_');
+  if (!cleanName) cleanName = 'file_' + Date.now();
+  let finalPath = path.join(targetDir, cleanName);
+  let counter = 1;
+  const ext = path.extname(cleanName);
+  const base = path.basename(cleanName, ext);
+
+  while (fs.existsSync(finalPath)) {
+    cleanName = `${base} (${counter})${ext}`;
+    finalPath = path.join(targetDir, cleanName);
+    counter++;
+  }
+
+  try {
+    const writeStream = fs.createWriteStream(finalPath);
+    for (let i = 0; i < numChunks; i++) {
+      const chunkFile = path.join(chunkDir, `chunk_${i}.part`);
+      const buffer = fs.readFileSync(chunkFile);
+      writeStream.write(buffer);
+    }
+    writeStream.end();
+
+    await new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+
+    // Cleanup chunk temporary files
+    try {
+      fs.rmSync(chunkDir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn('[FILES] Error cleaning up chunks:', e.message);
+    }
+
+    // Determine metadata & cover
+    const relPath = folder ? `${folder}/${cleanName}` : cleanName;
+    const stats = fs.statSync(finalPath);
+    let fileType = 'other';
+    const lowerExt = path.extname(cleanName).toLowerCase();
+    if (['.mp4', '.mkv', '.webm', '.avi', '.mov'].includes(lowerExt)) fileType = 'video';
+    else if (['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac'].includes(lowerExt)) fileType = 'audio';
+    else if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'].includes(lowerExt)) fileType = 'image';
+    else if (['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.log', '.sh', '.py', '.yml', '.yaml', '.pdf'].includes(lowerExt)) fileType = 'text';
+
+    const coverUrl = (fileType === 'audio' || fileType === 'video')
+      ? `/api/files/cover?path=${encodeURIComponent(relPath)}`
+      : (fileType === 'image' ? `/uploads/${relPath}` : null);
+
+    const newItem = {
+      id: relPath,
+      originalname: cleanName,
+      filename: cleanName,
+      path: relPath,
+      mimetype: mimetype || 'application/octet-stream',
+      size: stats.size,
+      type: fileType,
+      uploadDate: new Date().toISOString(),
+      url: `/uploads/${relPath}`,
+      coverUrl
+    };
+
+    const mediaList = db.get('media') || [];
+    const updatedMedia = [newItem, ...mediaList];
+    db.set('media', updatedMedia);
+
+    if (req.app.get('wssBroadcast')) {
+      req.app.get('wssBroadcast')('MEDIA_UPDATED', updatedMedia);
+    }
+
+    res.json({ success: true, file: newItem });
+  } catch (err) {
+    console.error('[FILES] Error assembling chunked upload:', err);
+    res.status(500).json({ error: 'Failed to assemble file chunks: ' + err.message });
+  }
 });
 
 // Rename file or directory

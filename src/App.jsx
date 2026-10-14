@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { DashboardProvider } from './context/DashboardContext';
+import { DashboardProvider, useDashboard } from './context/DashboardContext';
 import { ClockHUD } from './components/ClockHUD';
 import { AlarmCenter } from './components/AlarmCenter';
 import { StorageMonitor } from './components/StorageMonitor';
@@ -14,6 +14,7 @@ import { Clock, Bell, HardDrive, Music, Target, Zap } from 'lucide-react';
 const TABS = ['all', 'clock', 'media', 'tasks', 'alarms', 'storage'];
 
 const MainLayout = () => {
+  const { deviceRole, toggleDeviceRole } = useDashboard();
   const [activeTab, setActiveTab] = useState('all');
   const [wakeLockActive, setWakeLockActive] = useState(false);
 
@@ -169,6 +170,28 @@ const MainLayout = () => {
           <h1 className="font-display" style={{ fontSize: '1.2rem', letterSpacing: '1px', color: 'var(--text)', lineHeight: '1', whiteSpace: 'nowrap' }}>
             VIGI<span style={{ color: 'var(--red-ember)' }}>LD</span>
           </h1>
+
+          {/* Device Role Mode Pill (Dock Station vs Remote Controller) */}
+          <button
+            onClick={toggleDeviceRole}
+            className="badge font-mono"
+            style={{
+              fontSize: '0.62rem',
+              background: deviceRole === 'dock' ? 'rgba(217, 68, 50, 0.18)' : 'rgba(56, 189, 248, 0.18)',
+              color: deviceRole === 'dock' ? 'var(--red-ember)' : '#38bdf8',
+              borderColor: deviceRole === 'dock' ? 'var(--red-ember)' : '#38bdf8',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 6px'
+            }}
+            title={deviceRole === 'dock' 
+              ? 'Station Dock Mode: Emits audio and alarm sirens. Click to switch to Remote Client.' 
+              : 'Remote Client Mode: Silent controller for desk dock (no local audio/sirens). Click to switch to Dock Station.'}
+          >
+            {deviceRole === 'dock' ? '🖥️ DOCK' : '💻 REMOTE'}
+          </button>
 
           {/* Screen Wake Lock Status Badge */}
           {wakeLockActive && (

@@ -28,7 +28,7 @@ router.post('/', (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  tasks.unshift(newTask);
+  tasks.push(newTask);
   db.set('tasks', tasks);
 
   if (req.app.get('wssBroadcast')) {

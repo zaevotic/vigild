@@ -285,13 +285,18 @@ export const PlaylistStock = () => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             <button 
               onClick={toggleShuffle} 
-              title={shuffle ? 'Shuffle ON' : 'Shuffle OFF'}
+              title={shuffle 
+                ? (!activePlaylistId ? 'Shuffle: ON (Global Pool - Dimmed)' : 'Shuffle: ON (Playlist Shuffled)')
+                : 'Shuffle: OFF'}
               style={{ 
                 padding: '2px 5px', 
-                background: shuffle ? 'var(--red-mute)' : 'transparent', 
-                border: `1px solid ${shuffle ? 'var(--red-ember)' : 'transparent'}`,
+                background: shuffle ? (!activePlaylistId ? 'rgba(217, 68, 50, 0.08)' : 'var(--red-mute)') : 'transparent', 
+                border: `1px solid ${shuffle ? (!activePlaylistId ? 'rgba(217, 68, 50, 0.3)' : 'var(--red-ember)') : 'transparent'}`,
                 borderRadius: 'var(--radius-sm)',
-                color: shuffle ? 'var(--red-ember)' : 'var(--text3)' 
+                color: shuffle ? (!activePlaylistId ? 'rgba(217, 68, 50, 0.65)' : 'var(--red-ember)') : 'var(--text3)',
+                opacity: shuffle && !activePlaylistId ? 0.65 : 1,
+                transition: 'all 0.2s ease',
+                cursor: 'pointer'
               }}
             >
               <Shuffle size={10} />
@@ -311,16 +316,20 @@ export const PlaylistStock = () => {
 
             <button 
               onClick={toggleRepeat} 
-              title={`Repeat: ${repeat.toUpperCase()}`}
+              title={repeat && repeat !== 'off'
+                ? 'Repeat: ON (Loops current playlist)'
+                : 'Repeat: OFF (Switches to Global Music on completion)'}
               style={{ 
                 padding: '2px 5px', 
-                background: repeat !== 'off' ? 'var(--amber-warm-dim)' : 'transparent', 
-                border: `1px solid ${repeat !== 'off' ? 'var(--amber-dim)' : 'transparent'}`,
+                background: repeat && repeat !== 'off' ? 'var(--amber-warm-dim)' : 'transparent', 
+                border: `1px solid ${repeat && repeat !== 'off' ? 'var(--amber-dim)' : 'transparent'}`,
                 borderRadius: 'var(--radius-sm)',
-                color: repeat !== 'off' ? 'var(--amber)' : 'var(--text3)' 
+                color: repeat && repeat !== 'off' ? 'var(--amber)' : 'var(--text3)',
+                transition: 'all 0.2s ease',
+                cursor: 'pointer'
               }}
             >
-              {repeat === 'one' ? <Repeat1 size={10} /> : <Repeat size={10} />}
+              <Repeat size={10} />
             </button>
           </div>
         </div>
