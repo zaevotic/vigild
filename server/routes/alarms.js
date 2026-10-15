@@ -61,6 +61,35 @@ function ensureDefaultTone() {
 
 ensureDefaultTone();
 
+// Helper to resolve tone and safely fall back if referenced uploaded song was deleted
+function resolveTone(toneKey) {
+  if (!toneKey || toneKey === 'default') {
+    return {
+      tone: 'default',
+      name: 'Default tone',
+      url: '/uploads/tones/default_cyber_alarm.wav'
+    };
+  }
+
+  // Check if toneKey matches an uploaded song by ID
+  const mediaList = db.get('media') || [];
+  const song = mediaList.find(m => m.id === toneKey || m.path === toneKey || m.filename === toneKey);
+  if (song) {
+    return {
+      tone: song.id,
+      name: song.title || song.originalname || song.filename,
+      url: song.url || `/uploads/${song.path || song.filename}`
+    };
+  }
+
+  // Fallback to default
+  return {
+    tone: 'default',
+    name: 'Default tone',
+    url: '/uploads/tones/default_cyber_alarm.wav'
+  };
+}
+
 const router = express.Router();
 
 // GET all alarms + active alarm
@@ -71,44 +100,76 @@ router.get('/', (req, res) => {
   });
 });
 
-// GET list of available audio tone files in uploads/tones
+// GET list of available audio tones (built-in default + uploaded songs)
 router.get('/tones', (req, res) => {
   ensureDefaultTone();
-  try {
-    const files = fs.readdirSync(TONES_DIR).filter(f => /\.(wav|mp3|ogg|m4a|flac)$/i.test(f));
-    const toneList = files.map(filename => {
-      const nameWithoutExt = path.parse(filename).name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      return {
-        id: filename,
-        name: nameWithoutExt,
-        filename,
-        url: `/uploads/tones/${filename}`
-      };
+  const tones = [
+    {
+      id: 'default',
+      name: 'Default tone',
+      filename: 'default_cyber_alarm.wav',
+      url: '/uploads/tones/default_cyber_alarm.wav',
+      isBuiltIn: true
+    }
+  ];
+
+  // Include user uploaded songs as alarm tones
+  const mediaList = db.get('media') || [];
+  mediaList
+    .filter(m => m.type === 'audio' || /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(m.filename || ''))
+    .forEach(m => {
+      tones.push({
+        id: m.id,
+        name: m.title || m.originalname || m.filename,
+        filename: m.filename,
+        url: m.url || `/uploads/${m.path || m.filename}`,
+        isBuiltIn: false
+      });
     });
-    res.json(toneList);
-  } catch (e) {
-    console.error('[ALARM] Error listing tones:', e);
-    res.json([{ id: 'default_cyber_alarm.wav', name: 'Default Cyber Alarm', filename: 'default_cyber_alarm.wav', url: '/uploads/tones/default_cyber_alarm.wav' }]);
-  }
+
+  res.json(tones);
 });
 
 // POST new alarm
 router.post('/', (req, res) => {
-  const { time, label, days, tone, toneUrl, snoozeMinutes } = req.body;
+  const {
+    time,
+    label,
+    days,
+    preset,
+    tone = 'default',
+    volume = 80,
+    fadeIn = 1,
+    snoozeMinutes = 5,
+    ringDurationMinutes = 5
+  } = req.body;
+
+  let daysArr = [1, 1, 1, 1, 1, 0, 0];
+  if (preset === 'wk') daysArr = [1, 1, 1, 1, 1, 0, 0];
+  else if (preset === 'we') daysArr = [0, 0, 0, 0, 0, 1, 1];
+  else if (preset === 'all') daysArr = [1, 1, 1, 1, 1, 1, 1];
+  else if (preset === 'once') daysArr = [0, 0, 0, 0, 0, 0, 0];
+  else if (Array.isArray(days)) daysArr = days;
+
+  const resolved = resolveTone(tone);
   const alarms = db.get('alarms') || [];
-  
+
   const newAlarm = {
     id: 'alarm_' + Date.now(),
-    time: time || '08:00',
-    label: label || 'Alarm',
-    days: days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    time: time || '07:30',
+    label: (label || 'Alarm').trim(),
+    days: daysArr,
     enabled: true,
-    tone: tone || 'Default Cyber Alarm',
-    toneUrl: toneUrl || '/uploads/tones/default_cyber_alarm.wav',
-    snoozeMinutes: snoozeMinutes || 5
+    tone: resolved.tone,
+    toneUrl: resolved.url,
+    volume: typeof volume === 'number' ? volume : 80,
+    fadeIn: fadeIn !== undefined ? fadeIn : 1,
+    snoozeMinutes: typeof snoozeMinutes === 'number' ? snoozeMinutes : 5,
+    ringDurationMinutes: typeof ringDurationMinutes === 'number' ? ringDurationMinutes : 5
   };
 
   alarms.push(newAlarm);
+  alarms.sort((a, b) => a.time.localeCompare(b.time));
   db.set('alarms', alarms);
 
   if (req.app.get('wssBroadcast')) {
@@ -118,6 +179,7 @@ router.post('/', (req, res) => {
   res.json({ success: true, alarm: newAlarm });
 });
 
+// PUT update alarm
 router.put('/:id', (req, res) => {
   const { id } = req.params;
   const alarms = db.get('alarms') || [];
@@ -125,7 +187,43 @@ router.put('/:id', (req, res) => {
 
   if (index === -1) return res.status(404).json({ error: 'Alarm not found' });
 
-  alarms[index] = { ...alarms[index], ...req.body };
+  const {
+    time,
+    label,
+    days,
+    preset,
+    tone,
+    volume,
+    fadeIn,
+    snoozeMinutes,
+    ringDurationMinutes,
+    enabled
+  } = req.body;
+
+  if (time !== undefined) alarms[index].time = time;
+  if (label !== undefined) alarms[index].label = label.trim();
+  if (enabled !== undefined) alarms[index].enabled = !!enabled;
+  if (volume !== undefined) alarms[index].volume = volume;
+  if (fadeIn !== undefined) alarms[index].fadeIn = fadeIn;
+  if (snoozeMinutes !== undefined) alarms[index].snoozeMinutes = snoozeMinutes;
+  if (ringDurationMinutes !== undefined) alarms[index].ringDurationMinutes = ringDurationMinutes;
+
+  if (preset) {
+    if (preset === 'wk') alarms[index].days = [1, 1, 1, 1, 1, 0, 0];
+    else if (preset === 'we') alarms[index].days = [0, 0, 0, 0, 0, 1, 1];
+    else if (preset === 'all') alarms[index].days = [1, 1, 1, 1, 1, 1, 1];
+    else if (preset === 'once') alarms[index].days = [0, 0, 0, 0, 0, 0, 0];
+  } else if (Array.isArray(days)) {
+    alarms[index].days = days;
+  }
+
+  if (tone !== undefined) {
+    const resolved = resolveTone(tone);
+    alarms[index].tone = resolved.tone;
+    alarms[index].toneUrl = resolved.url;
+  }
+
+  alarms.sort((a, b) => a.time.localeCompare(b.time));
   db.set('alarms', alarms);
 
   if (req.app.get('wssBroadcast')) {
@@ -135,6 +233,7 @@ router.put('/:id', (req, res) => {
   res.json({ success: true, alarm: alarms[index] });
 });
 
+// PATCH toggle alarm enabled status
 router.patch('/:id/toggle', (req, res) => {
   const { id } = req.params;
   const alarms = db.get('alarms') || [];
@@ -152,7 +251,31 @@ router.patch('/:id/toggle', (req, res) => {
   res.json({ success: true, alarm: alarms[index] });
 });
 
-// Trigger alarm (remote test or scheduled match)
+// POST test alarm tone on the dock
+router.post('/test', (req, res) => {
+  const { tone, toneUrl } = req.body;
+  const resolved = resolveTone(tone);
+  const testAlarm = {
+    id: 'test_alarm_' + Date.now(),
+    time: 'TEST',
+    label: 'Test Tone',
+    tone: resolved.tone,
+    toneUrl: toneUrl || resolved.url,
+    volume: 80,
+    isTest: true,
+    triggeredAt: new Date().toISOString()
+  };
+
+  db.set('activeAlarm', testAlarm);
+
+  if (req.app.get('wssBroadcast')) {
+    req.app.get('wssBroadcast')('ALARM_TRIGGERED', testAlarm);
+  }
+
+  res.json({ success: true, activeAlarm: testAlarm });
+});
+
+// Trigger alarm (scheduled match or manual trigger)
 router.post('/:id/trigger', (req, res) => {
   const { id } = req.params;
   const alarms = db.get('alarms') || [];
@@ -160,12 +283,15 @@ router.post('/:id/trigger', (req, res) => {
 
   if (!alarm) return res.status(404).json({ error: 'Alarm not found' });
 
+  const resolved = resolveTone(alarm.tone);
   const activeAlarm = {
     id: alarm.id,
     time: alarm.time,
     label: alarm.label,
-    tone: alarm.tone || 'Default Cyber Alarm',
-    toneUrl: alarm.toneUrl || '/uploads/tones/default_cyber_alarm.wav',
+    tone: resolved.tone,
+    toneUrl: resolved.url,
+    volume: alarm.volume || 80,
+    fadeIn: alarm.fadeIn || 1,
     triggeredAt: new Date().toISOString()
   };
 
@@ -190,13 +316,14 @@ router.post('/dismiss', (req, res) => {
 
 router.post('/snooze', (req, res) => {
   const active = db.get('activeAlarm');
+  const snoozeMins = active?.snoozeMinutes || 5;
   db.set('activeAlarm', null);
 
   if (req.app.get('wssBroadcast')) {
-    req.app.get('wssBroadcast')('ALARM_SNOOZED', { active, snoozeTimeMinutes: 5 });
+    req.app.get('wssBroadcast')('ALARM_SNOOZED', { active, snoozeTimeMinutes: snoozeMins });
   }
 
-  res.json({ success: true });
+  res.json({ success: true, snoozeTimeMinutes: snoozeMins });
 });
 
 router.delete('/:id', (req, res) => {

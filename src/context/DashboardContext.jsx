@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { uploadFileInChunks } from '../utils/chunkUploader';
 
 const DashboardContext = createContext(null);
 
@@ -23,6 +24,17 @@ export const DashboardProvider = ({ children }) => {
   const [media, setMedia] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [focusState, setFocusState] = useState({
+    targetTaskId: null,
+    targetTitle: 'Focus Session',
+    mode: 'work',
+    durationMinutes: 25,
+    startTimestamp: null,
+    pausedDurationMs: 0,
+    isRunning: false,
+    completedCycles: 0
+  });
+  const [transfers, setTransfers] = useState([]);
   const [playbackState, setPlaybackState] = useState({
     currentMedia: null,
     isPlaying: false,
@@ -83,12 +95,13 @@ export const DashboardProvider = ({ children }) => {
   // Fetch initial REST data
   const refreshAllData = async () => {
     try {
-      const [alarmsRes, filesRes, playlistsRes, tasksRes, sysRes] = await Promise.all([
+      const [alarmsRes, filesRes, playlistsRes, tasksRes, sysRes, focusRes] = await Promise.all([
         fetch('/api/alarms').then(r => r.json()).catch(() => ({})),
         fetch('/api/files').then(r => r.json()).catch(() => []),
         fetch('/api/playlists').then(r => r.json()).catch(() => []),
         fetch('/api/tasks').then(r => r.json()).catch(() => []),
-        fetch('/api/system').then(r => r.json()).catch(() => null)
+        fetch('/api/system').then(r => r.json()).catch(() => null),
+        fetch('/api/focus').then(r => r.json()).catch(() => null)
       ]);
 
       if (alarmsRes && alarmsRes.alarms) setAlarms(alarmsRes.alarms);
@@ -96,6 +109,7 @@ export const DashboardProvider = ({ children }) => {
       if (Array.isArray(filesRes)) setMedia(filesRes);
       if (Array.isArray(playlistsRes)) setPlaylists(playlistsRes);
       if (Array.isArray(tasksRes)) setTasks(tasksRes);
+      if (focusRes) setFocusState(focusRes);
       if (sysRes) {
         setSystem(sysRes);
         if (sysRes.settings) setSettings(sysRes.settings);
@@ -136,6 +150,7 @@ export const DashboardProvider = ({ children }) => {
                 if (payload.media) setMedia(payload.media);
                 if (payload.playlists) setPlaylists(payload.playlists);
                 if (payload.tasks) setTasks(payload.tasks);
+                if (payload.focusState) setFocusState(payload.focusState);
                 if (payload.playbackState) setPlaybackState(prev => ({ ...prev, ...payload.playbackState }));
                 if (payload.settings) setSettings(payload.settings);
                 break;
@@ -158,6 +173,12 @@ export const DashboardProvider = ({ children }) => {
                 break;
               case 'TASKS_UPDATED':
                 setTasks(payload);
+                break;
+              case 'FOCUS_UPDATED':
+                if (payload) setFocusState(payload);
+                break;
+              case 'FOCUS_COMPLETED':
+                // Informational only; FOCUS_UPDATED carries the new state
                 break;
               case 'PLAYBACK_UPDATED':
                 setPlaybackState(prev => ({ ...prev, ...payload }));
@@ -577,9 +598,13 @@ export const DashboardProvider = ({ children }) => {
   // Task Actions
   const addTask = async (taskData) => {
     try {
+      const reqId = 'req-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8);
       const res = await fetch('/api/tasks', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-request-id': reqId
+        },
         body: JSON.stringify(taskData)
       });
       const data = await res.json();
@@ -629,6 +654,19 @@ export const DashboardProvider = ({ children }) => {
     }
   };
 
+  const reorderTasks = async (orderedIds) => {
+    try {
+      const res = await fetch('/api/tasks/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderedIds })
+      });
+      return res.json();
+    } catch (e) {
+      console.error('[reorderTasks Error]', e);
+    }
+  };
+
   const clearCompletedTasks = async () => {
     try {
       setTasks(prev => prev.filter(t => !t.completed));
@@ -642,9 +680,13 @@ export const DashboardProvider = ({ children }) => {
   // Alarm actions with direct state updates & fallback refresh
   const addAlarm = async (alarmData) => {
     try {
+      const reqId = 'req-' + Date.now() + '-' + Math.random().toString(36).substr(2, 8);
       const res = await fetch('/api/alarms', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-request-id': reqId
+        },
         body: JSON.stringify(alarmData)
       });
       const data = await res.json();
@@ -686,6 +728,19 @@ export const DashboardProvider = ({ children }) => {
       return data;
     } catch (e) {
       console.error('[toggleAlarm Error]', e);
+    }
+  };
+
+  const testAlarmTone = async (toneUrl, volume = 80) => {
+    try {
+      const res = await fetch('/api/alarms/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toneUrl, volume })
+      });
+      return res.json();
+    } catch (e) {
+      console.error('[testAlarmTone Error]', e);
     }
   };
 
@@ -739,6 +794,144 @@ export const DashboardProvider = ({ children }) => {
     return res.json();
   };
 
+  const updateSongMetadata = async (path, title, artist) => {
+    try {
+      const res = await fetch('/api/files/metadata', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, title, artist })
+      });
+      refreshAllData();
+      return res.json();
+    } catch (e) {
+      console.error('[updateSongMetadata Error]', e);
+    }
+  };
+
+  // Host Focus actions
+  const startFocus = async () => {
+    try {
+      const res = await fetch('/api/focus/start', { method: 'POST' });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+      return data;
+    } catch (e) {
+      console.error('[startFocus Error]', e);
+    }
+  };
+
+  const pauseFocus = async () => {
+    try {
+      const res = await fetch('/api/focus/pause', { method: 'POST' });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+      return data;
+    } catch (e) {
+      console.error('[pauseFocus Error]', e);
+    }
+  };
+
+  const resetFocus = async () => {
+    try {
+      const res = await fetch('/api/focus/reset', { method: 'POST' });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+      return data;
+    } catch (e) {
+      console.error('[resetFocus Error]', e);
+    }
+  };
+
+  const skipFocus = async () => {
+    try {
+      const res = await fetch('/api/focus/skip', { method: 'POST' });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+      return data;
+    } catch (e) {
+      console.error('[skipFocus Error]', e);
+    }
+  };
+
+  const setFocusMode = async (mode) => {
+    try {
+      const res = await fetch('/api/focus/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+      });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+    } catch (e) {
+      console.error('[setFocusMode Error]', e);
+    }
+  };
+
+  const setFocusTarget = async (targetTaskId, targetTitle, durationMinutes) => {
+    try {
+      const res = await fetch('/api/focus/target', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetTaskId, targetTitle, durationMinutes })
+      });
+      const data = await res.json();
+      if (data.focusState) setFocusState(data.focusState);
+      return data;
+    } catch (e) {
+      console.error('[setFocusTarget Error]', e);
+    }
+  };
+
+  // Chunked Upload with piece tracking for visual transfers
+  const startChunkedUpload = async (file, folder = '') => {
+    const transferId = 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
+    const totalChunks = Math.max(1, Math.ceil(file.size / (2 * 1024 * 1024)));
+    const newTr = {
+      id: transferId,
+      name: file.name,
+      done: 0,
+      total: totalChunks,
+      paused: false,
+      status: 'uploading',
+      size: file.size,
+      folder
+    };
+    setTransfers(prev => [newTr, ...prev]);
+
+    try {
+      await uploadFileInChunks(file, {
+        folder,
+        onProgress: (p) => {
+          setTransfers(prev => prev.map(t => {
+            if (t.id === transferId) {
+              return {
+                ...t,
+                done: p.currentChunk || 0,
+                total: p.totalChunks || t.total,
+                status: p.status,
+                percent: p.percent || 0
+              };
+            }
+            return t;
+          }));
+        }
+      });
+      refreshAllData();
+    } catch (err) {
+      setTransfers(prev => prev.map(t => t.id === transferId ? { ...t, status: 'error', error: err.message } : t));
+      console.error('[Upload Error]', err);
+    }
+  };
+
+  const toggleTransferPause = (transferId) => {
+    setTransfers(prev => prev.map(t => {
+      if (t.id === transferId) {
+        return { ...t, paused: !t.paused };
+      }
+      return t;
+    }));
+  };
+
   const updateSettings = async (newSettings) => {
     const res = await fetch('/api/system/settings', {
       method: 'PUT',
@@ -757,6 +950,8 @@ export const DashboardProvider = ({ children }) => {
       media,
       playlists,
       tasks,
+      focusState,
+      transfers,
       playbackState,
       settings,
       system,
@@ -779,15 +974,26 @@ export const DashboardProvider = ({ children }) => {
       updateTask,
       toggleTask,
       deleteTask,
+      reorderTasks,
       clearCompletedTasks,
       addAlarm,
       updateAlarm,
       toggleAlarm,
+      testAlarmTone,
       triggerAlarmTest,
       dismissAlarm,
       snoozeAlarm,
       deleteAlarm,
       deleteMedia,
+      updateSongMetadata,
+      startFocus,
+      pauseFocus,
+      resetFocus,
+      skipFocus,
+      setFocusMode,
+      setFocusTarget,
+      startChunkedUpload,
+      toggleTransferPause,
       updateSettings,
       refreshAllData,
       fetchTones,

@@ -528,7 +528,73 @@ router.post('/rename', (req, res) => {
   }
 });
 
-// Robust Delete File or Directory Endpoint (Handles query params or wildcard paths)
+// PUT /api/files/metadata - Edit song metadata (title, artist) without copying/moving files
+router.put('/metadata', (req, res) => {
+  const { path: filePath, title, artist } = req.body;
+  if (!filePath) return res.status(400).json({ error: 'path is required' });
+
+  const mediaList = db.get('media') || [];
+  const item = mediaList.find(m => m.path === filePath || m.id === filePath);
+  if (!item) return res.status(404).json({ error: 'Media file not found' });
+
+  if (title !== undefined) item.title = title.trim();
+  if (artist !== undefined) item.artist = artist.trim();
+  item.updatedAt = new Date().toISOString();
+
+  db.set('media', mediaList);
+
+  if (req.app.get('wssBroadcast')) {
+    req.app.get('wssBroadcast')('MEDIA_UPDATED', mediaList);
+  }
+
+  res.json({ success: true, item });
+});
+
+// GET /api/files/download - Range-based resumable download
+router.get('/download', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).send('path is required');
+
+  const rootDir = resolveStoragePath();
+  const decodedPath = decodeURIComponent(filePath).replace(/^file_|^dir_/, '');
+  const fullPath = path.join(rootDir, decodedPath);
+
+  if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+    return res.status(404).send('File not found');
+  }
+
+  const stat = fs.statSync(fullPath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(fullPath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${path.basename(fullPath)}"`
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${path.basename(fullPath)}"`,
+      'Accept-Ranges': 'bytes'
+    };
+    res.writeHead(200, head);
+    fs.createReadStream(fullPath).pipe(res);
+  }
+});
+
+// Robust Delete File or Directory Endpoint with Cascade Reconcile
 const handleDelete = (req, res) => {
   const targetPath = req.query.path || req.params[0] || req.params.id;
   if (!targetPath) {
@@ -545,6 +611,64 @@ const handleDelete = (req, res) => {
   const mediaList = db.get('media') || [];
   const updatedMedia = mediaList.filter(item => item.path !== decodedPath && item.id !== decodedPath && item.filename !== decodedPath);
   db.set('media', updatedMedia);
+
+  // Cascade 1: Reconcile alarms referencing this deleted media file
+  const alarms = db.get('alarms') || [];
+  let alarmsUpdated = false;
+  alarms.forEach(a => {
+    if (a.tone === decodedPath || (a.toneUrl && a.toneUrl.includes(decodedPath))) {
+      a.tone = 'default';
+      a.toneUrl = '/uploads/tones/default_cyber_alarm.wav';
+      alarmsUpdated = true;
+    }
+  });
+  if (alarmsUpdated) {
+    db.set('alarms', alarms);
+    if (req.app.get('wssBroadcast')) {
+      req.app.get('wssBroadcast')('ALARMS_UPDATED', { alarms, activeAlarm: db.get('activeAlarm') });
+    }
+  }
+
+  // Cascade 2: Reconcile playlists referencing this deleted track
+  const playlists = db.get('playlists') || [];
+  let playlistsUpdated = false;
+  playlists.forEach(pl => {
+    if (pl.tracks && pl.tracks.length > 0) {
+      const initialLen = pl.tracks.length;
+      pl.tracks = pl.tracks.filter(t => t.id !== decodedPath && t.path !== decodedPath && t.filename !== decodedPath);
+      if (pl.tracks.length !== initialLen) playlistsUpdated = true;
+    }
+  });
+  if (playlistsUpdated) {
+    db.set('playlists', playlists);
+    if (req.app.get('wssBroadcast')) {
+      req.app.get('wssBroadcast')('PLAYLISTS_UPDATED', playlists);
+    }
+  }
+
+  // Cascade 3: Reconcile playback state
+  const playback = db.get('playbackState') || {};
+  let pbUpdated = false;
+  if (playback.originalQueue && playback.originalQueue.length > 0) {
+    playback.originalQueue = playback.originalQueue.filter(t => t.id !== decodedPath && t.path !== decodedPath);
+    pbUpdated = true;
+  }
+  if (playback.shuffledQueue && playback.shuffledQueue.length > 0) {
+    playback.shuffledQueue = playback.shuffledQueue.filter(t => t.id !== decodedPath && t.path !== decodedPath);
+    pbUpdated = true;
+  }
+  if (playback.currentMedia && (playback.currentMedia.id === decodedPath || playback.currentMedia.path === decodedPath)) {
+    playback.currentMedia = null;
+    playback.isPlaying = false;
+    playback.currentTime = 0;
+    pbUpdated = true;
+  }
+  if (pbUpdated) {
+    db.set('playbackState', playback);
+    if (req.app.get('wssBroadcast')) {
+      req.app.get('wssBroadcast')('PLAYBACK_UPDATED', playback);
+    }
+  }
 
   if (fs.existsSync(fullPath)) {
     try {

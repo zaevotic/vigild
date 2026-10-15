@@ -91,6 +91,7 @@ export function getStorageStats() {
         usedBytes,
         usedGB,
         maxGB: maxGB || 128,
+        totalGB: maxGB || 128,
         percentage,
         isSdCard: true
       };
@@ -119,11 +120,12 @@ export function getStorageStats() {
       usedBytes,
       usedGB,
       maxGB,
+      totalGB: maxGB,
       percentage,
       isSdCard: true
     };
   } catch (e) {
-    return { storagePath, usedBytes: 0, usedGB: 0, maxGB: 128, percentage: 0, isSdCard: true };
+    return { storagePath, usedBytes: 0, usedGB: 0, maxGB: 128, totalGB: 128, percentage: 0, isSdCard: true };
   }
 }
 

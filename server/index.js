@@ -13,6 +13,7 @@ import systemRouter, { resolveStoragePath } from './routes/system.js';
 import playbackRouter from './routes/playback.js';
 import playlistsRouter from './routes/playlists.js';
 import tasksRouter from './routes/tasks.js';
+import focusRouter, { getAuthoritativeFocusState } from './routes/focus.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,6 +72,7 @@ wss.on('connection', (ws) => {
       media: db.get('media') || [],
       playlists: db.get('playlists') || [],
       tasks: db.get('tasks') || [],
+      focusState: getAuthoritativeFocusState(),
       playbackState: db.get('playbackState') || { currentMedia: null, isPlaying: false, currentTime: 0, duration: 0 },
       settings: db.get('settings') || {}
     }
@@ -110,6 +112,7 @@ app.use('/api/system', systemRouter);
 app.use('/api/playback', playbackRouter);
 app.use('/api/playlists', playlistsRouter);
 app.use('/api/tasks', tasksRouter);
+app.use('/api/focus', focusRouter);
 
 // Background alarm trigger loop (checks every 10 seconds)
 let lastTriggeredMinute = '';
@@ -129,10 +132,17 @@ setInterval(() => {
 
   if (activeAlarm) return;
 
+  const dayIndex = (now.getDay() + 6) % 7; // 0: Mon, 1: Tue, ... 6: Sun
   const matchingAlarm = alarms.find(a => {
     if (!a.enabled) return false;
     if (a.time !== currentTime) return false;
-    if (a.days && a.days.length > 0 && !a.days.includes(currentDay)) return false;
+    if (Array.isArray(a.days)) {
+      if (typeof a.days[0] === 'number') {
+        if (!a.days[dayIndex]) return false;
+      } else if (a.days.length > 0 && !a.days.includes(currentDay)) {
+        return false;
+      }
+    }
     return true;
   });
 
@@ -142,15 +152,74 @@ setInterval(() => {
       id: matchingAlarm.id,
       time: matchingAlarm.time,
       label: matchingAlarm.label,
-      tone: matchingAlarm.tone || 'Default Cyber Alarm',
+      tone: matchingAlarm.tone || 'default',
       toneUrl: matchingAlarm.toneUrl || '/uploads/tones/default_cyber_alarm.wav',
+      volume: matchingAlarm.volume || 80,
+      fadeIn: matchingAlarm.fadeIn || 1,
       triggeredAt: new Date().toISOString()
     };
     db.set('activeAlarm', triggered);
     console.log(`[ALARM] Triggering scheduled alarm across network: ${matchingAlarm.label} (${matchingAlarm.time})`);
     broadcast('ALARM_TRIGGERED', triggered);
   }
-}, 10000);
+}, 5000);
+
+// Host Focus completion ticker (runs every second on the host)
+setInterval(() => {
+  const focus = db.get('focusState');
+  if (!focus || focus.status !== 'running' || !focus.startTimestamp) return;
+
+  const current = getAuthoritativeFocusState();
+  if (current.remainingSec <= 0) {
+    let nextMode = 'focus';
+    let nextCycle = current.cycleCount || 0;
+    let nextSessionsToday = (current.sessionsToday || 0);
+
+    if (current.mode === 'focus') {
+      nextSessionsToday += 1;
+      nextCycle = (nextCycle + 1) % 4;
+      nextMode = nextCycle === 0 ? 'longBreak' : 'shortBreak';
+
+      // Increment completed sessions on target task
+      if (current.currentTaskId) {
+        const tasks = db.get('tasks') || [];
+        const task = tasks.find(t => t.id === current.currentTaskId);
+        if (task) {
+          task.completedSessions = (task.completedSessions || 0) + 1;
+          task.updatedAt = new Date().toISOString();
+          db.set('tasks', tasks);
+          broadcast('TASKS_UPDATED', tasks);
+        }
+      }
+    } else {
+      nextMode = 'focus';
+    }
+
+    const updated = {
+      ...current,
+      status: 'idle',
+      mode: nextMode,
+      cycleCount: nextCycle,
+      sessionsToday: nextSessionsToday,
+      startTimestamp: null,
+      pauseTimestamp: null,
+      pausedDurationMs: 0,
+      totalDurationSec: nextMode === 'focus' ? 25 * 60 : (nextMode === 'longBreak' ? 15 * 60 : 5 * 60),
+      history: [
+        ...(current.history || []).slice(-49),
+        {
+          mode: current.mode,
+          taskId: current.currentTaskId,
+          completedAt: new Date().toISOString()
+        }
+      ]
+    };
+
+    db.set('focusState', updated);
+    broadcast('FOCUS_COMPLETED', { mode: current.mode, taskId: current.currentTaskId });
+    broadcast('FOCUS_UPDATED', updated);
+  }
+}, 1000);
 
 // Integrate Frontend (Vite Dev Middleware or Static Production Bundle)
 const DIST_DIR = path.join(__dirname, '../dist');
