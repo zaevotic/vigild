@@ -527,12 +527,12 @@ export const DashboardProvider = ({ children }) => {
   };
 
   // Playlist management actions
-  const createPlaylist = async (name) => {
+  const createPlaylist = async (name, tracks = [], cv = null) => {
     try {
       const res = await fetch('/api/playlists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, tracks: [] })
+        body: JSON.stringify({ name, tracks, cv })
       });
       const data = await res.json();
       if (data.playlist) {
@@ -541,6 +541,20 @@ export const DashboardProvider = ({ children }) => {
       return data;
     } catch (e) {
       console.error('[createPlaylist Error]', e);
+    }
+  };
+
+  const updatePlaylist = async (playlistId, updateObj) => {
+    try {
+      setPlaylists(prev => prev.map(p => p.id === playlistId ? { ...p, ...updateObj } : p));
+      const res = await fetch(`/api/playlists/${playlistId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateObj)
+      });
+      return res.json();
+    } catch (e) {
+      console.error('[updatePlaylist Error]', e);
     }
   };
 
@@ -966,6 +980,7 @@ export const DashboardProvider = ({ children }) => {
       playPrevMedia,
       sendPlaybackUpdate,
       createPlaylist,
+      updatePlaylist,
       updatePlaylistTracks,
       addTrackToPlaylist,
       removeTrackFromPlaylist,

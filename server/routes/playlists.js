@@ -11,7 +11,7 @@ router.get('/', (req, res) => {
 
 // Create a new playlist
 router.post('/', (req, res) => {
-  const { name, tracks = [] } = req.body;
+  const { name, tracks = [], cv = null } = req.body;
   if (!name) return res.status(400).json({ error: 'Playlist name is required' });
 
   const playlists = db.get('playlists') || [];
@@ -19,6 +19,7 @@ router.post('/', (req, res) => {
     id: 'pl_' + Date.now(),
     name: name.trim(),
     tracks: tracks,
+    cv: cv || null,
     createdAt: new Date().toISOString()
   };
 
@@ -32,10 +33,10 @@ router.post('/', (req, res) => {
   res.json({ success: true, playlist: newPlaylist });
 });
 
-// Update playlist (name or tracks re-ordering / additions)
+// Update playlist (name, cover image, or tracks)
 router.put('/:id', (req, res) => {
   const { id } = req.params;
-  const { name, tracks } = req.body;
+  const { name, tracks, cv } = req.body;
 
   const playlists = db.get('playlists') || [];
   const index = playlists.findIndex(p => p.id === id);
@@ -46,6 +47,7 @@ router.put('/:id', (req, res) => {
 
   if (name !== undefined) playlists[index].name = name.trim();
   if (tracks !== undefined) playlists[index].tracks = tracks;
+  if (cv !== undefined) playlists[index].cv = cv;
   playlists[index].updatedAt = new Date().toISOString();
 
   db.set('playlists', playlists);

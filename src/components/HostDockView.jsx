@@ -36,6 +36,39 @@ export const HostDockView = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [musicSubtab, setMusicSubtab] = useState('queue'); // 'queue' | 'playlists'
   const [playlistView, setPlaylistView] = useState('list'); // 'list' | 'grid'
+  const [isFullscreen, setIsFullscreen] = useState(
+    typeof document !== 'undefined' ? !!(document.fullscreenElement || document.webkitFullscreenElement) : false
+  );
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
+
+  const toggleFullscreen = (e) => {
+    e?.stopPropagation?.();
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch(() => {});
+      } else if (docEl.webkitRequestFullscreen) {
+        docEl.webkitRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+    }
+  };
 
   const pagerRef = useRef(null);
   const railRef = useRef(null);
@@ -264,6 +297,14 @@ export const HostDockView = () => {
   const currentSongVisuals = getSongThumb(currentSong, currentQueueIdx >= 0 ? currentQueueIdx : 0);
   const coverUrl = currentSong ? (currentSong.coverUrl || `/api/files/cover?path=${encodeURIComponent(currentSong.path || currentSong.filename || '')}`) : null;
 
+  const lanIp = system?.network?.primaryIp;
+  const lanPort = system?.network?.port || window.location.port || '3000';
+  const displayHost = (lanIp && lanIp !== '127.0.0.1' && lanIp !== 'localhost')
+    ? `${lanIp}:${lanPort}`
+    : (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
+      ? window.location.host
+      : (lanIp ? `${lanIp}:${lanPort}` : window.location.host);
+
   return (
     <div className="host-dock-container" style={{
       width: '100vw',
@@ -393,13 +434,36 @@ export const HostDockView = () => {
           <div className="grid">
             {/* Clock Card */}
             <div className="card hot hud-clock">
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className={`chip ${isConnected ? 'ok' : ''}`}>
                   {isConnected ? 'online' : 'connecting'}
                 </span>
-                <span className="chip mono" style={{ fontSize: '11px' }}>
-                  http://{window.location.host}
+                <span className="chip mono" style={{ fontSize: '11px' }} title="Connect client browsers to this address">
+                  http://{displayHost}
                 </span>
+                <button
+                  className="chip"
+                  onClick={toggleFullscreen}
+                  title="Toggle Fullscreen Mode"
+                  style={{
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    background: isFullscreen ? 'rgba(255,45,63,0.14)' : undefined,
+                    borderColor: isFullscreen ? 'var(--red-d)' : undefined,
+                    color: isFullscreen ? '#fff' : 'var(--dim)'
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" style={{ width: '13px', height: '13px', stroke: 'currentColor', fill: 'none', strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+                    {isFullscreen ? (
+                      <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                    ) : (
+                      <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                    )}
+                  </svg>
+                  <span>{isFullscreen ? 'Exit' : 'Full'}</span>
+                </button>
               </div>
 
               <div>
@@ -446,12 +510,17 @@ export const HostDockView = () => {
                     </div>
                   )}
                 </div>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="title">
-                    {currentSong?.title || currentSong?.filename || 'No track selected'}
+                <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                  <div className="hud-np-marquee-wrapper">
+                    <div className={`hud-np-title ${isPlaying && (currentSong?.title || currentSong?.filename) ? 'marquee' : ''}`}>
+                      <span>{currentSong?.title || currentSong?.filename || 'No track selected'}</span>
+                      {isPlaying && (currentSong?.title || currentSong?.filename) && (
+                        <span className="marquee-spacer">✦ {currentSong?.title || currentSong?.filename}</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="muted mono" style={{ fontSize: '13px' }}>
-                    {currentSong?.artist || (currentSong ? 'Local Vault' : 'Idle')}
+                  <div className="muted mono" style={{ fontSize: '13px', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {currentSong?.artist || activePlaylistName || (currentSong ? 'Now Playing' : 'Idle')}
                   </div>
                 </div>
               </div>
@@ -561,7 +630,7 @@ export const HostDockView = () => {
                 {/* Progress Scrubber */}
                 <div
                   className="prog"
-                  style={{ cursor: 'pointer', margin: '14px 0 10px' }}
+                  style={{ cursor: 'pointer' }}
                   onClick={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const clickX = e.clientX - rect.left;

@@ -70,6 +70,32 @@ function getLocalNetworkIPs() {
       }
     }
   }
+
+  // Prioritize active Wi-Fi / Ethernet interfaces and private IP ranges for local connections
+  addresses.sort((a, b) => {
+    const aWifi = /wlan|eth|en|wl|wifi/i.test(a.name);
+    const bWifi = /wlan|eth|en|wl|wifi/i.test(b.name);
+    if (aWifi && !bWifi) return -1;
+    if (!aWifi && bWifi) return 1;
+
+    const a192 = a.address.startsWith('192.168.');
+    const b192 = b.address.startsWith('192.168.');
+    if (a192 && !b192) return -1;
+    if (!a192 && b192) return 1;
+
+    const a10 = a.address.startsWith('10.');
+    const b10 = b.address.startsWith('10.');
+    if (a10 && !b10) return -1;
+    if (!a10 && b10) return 1;
+
+    const a172 = /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(a.address);
+    const b172 = /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(b.address);
+    if (a172 && !b172) return -1;
+    if (!a172 && b172) return 1;
+
+    return 0;
+  });
+
   return addresses.length > 0 ? addresses : [{ name: 'loopback', address: '127.0.0.1' }];
 }
 

@@ -223,7 +223,7 @@ setInterval(() => {
 
 // Integrate Frontend (Vite Dev Middleware or Static Production Bundle)
 const DIST_DIR = path.join(__dirname, '../dist');
-const isProduction = process.env.NODE_ENV === 'production' || fs.existsSync(DIST_DIR);
+const isProduction = process.env.NODE_ENV === 'production';
 
 if (isProduction && fs.existsSync(DIST_DIR)) {
   console.log('[Server] Serving production frontend build from dist/');
