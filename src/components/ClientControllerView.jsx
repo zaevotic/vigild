@@ -300,15 +300,35 @@ export const ClientControllerView = () => {
     setDockState(DOCK_STATES[(idx + 1) % 3]);
   };
 
+  const isNavigatingRef = useRef(false);
+  const scrollTimeoutRef = useRef(null);
+
   // Switch Pager Tab
   const goToTab = (i) => {
+    const pager = pagerRef.current;
+    if (!pager) return;
+
     setActiveTab(i);
-    if (pagerRef.current) {
-      pagerRef.current.scrollTo({
-        left: i * pagerRef.current.clientWidth,
-        behavior: 'smooth'
-      });
+    isNavigatingRef.current = true;
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+
+    pager.style.scrollSnapType = 'none';
+    pager.scrollTo({
+      left: i * pager.clientWidth,
+      behavior: 'smooth'
+    });
+
+    const restoreSnap = () => {
+      if (pagerRef.current) {
+        pagerRef.current.style.scrollSnapType = '';
+      }
+      isNavigatingRef.current = false;
+    };
+
+    if ('onscrollend' in window) {
+      pager.addEventListener('scrollend', restoreSnap, { once: true });
     }
+    scrollTimeoutRef.current = setTimeout(restoreSnap, 500);
   };
 
   // Double tap tab to maximize / minimize full workspace
@@ -1093,7 +1113,7 @@ export const ClientControllerView = () => {
           ref={pagerRef}
           id="pager"
           onScroll={() => {
-            if (!pagerRef.current) return;
+            if (!pagerRef.current || isNavigatingRef.current) return;
             const w = pagerRef.current.clientWidth || 1;
             const i = Math.round(pagerRef.current.scrollLeft / w);
             if (i !== activeTab && i >= 0 && i <= 3) setActiveTab(i);

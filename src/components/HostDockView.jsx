@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { useDashboard } from '../context/DashboardContext';
 
 export const HostDockView = () => {
@@ -32,7 +32,6 @@ export const HostDockView = () => {
 
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [railExpanded, setRailExpanded] = useState(false);
-  const [railHidden, setRailHidden] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [musicSubtab, setMusicSubtab] = useState('queue'); // 'queue' | 'playlists'
   const [playlistView, setPlaylistView] = useState('list'); // 'list' | 'grid'
@@ -72,9 +71,44 @@ export const HostDockView = () => {
 
   const pagerRef = useRef(null);
   const railRef = useRef(null);
+  const tabRefs = useRef([]);
   const pressTimerRef = useRef(null);
-  const idleTimerRef = useRef(null);
   const returnToHudTimerRef = useRef(null);
+
+  const [haloStyle, setHaloStyle] = useState({
+    transform: 'translate3d(0, 0, 0)',
+    width: 0,
+    height: 0,
+    opacity: 0
+  });
+
+  const updateHalo = useCallback(() => {
+    const rail = railRef.current;
+    const activeTabEl = tabRefs.current[activePageIndex];
+    if (!rail || !activeTabEl) return;
+
+    const railRect = rail.getBoundingClientRect();
+    const tabRect = activeTabEl.getBoundingClientRect();
+
+    const x = tabRect.left - railRect.left;
+    const y = tabRect.top - railRect.top;
+
+    setHaloStyle({
+      transform: `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`,
+      width: Math.round(tabRect.width),
+      height: Math.round(tabRect.height),
+      opacity: 1
+    });
+  }, [activePageIndex]);
+
+  useLayoutEffect(() => {
+    updateHalo();
+  }, [updateHalo, railExpanded]);
+
+  useEffect(() => {
+    window.addEventListener('resize', updateHalo);
+    return () => window.removeEventListener('resize', updateHalo);
+  }, [updateHalo]);
 
   // Live seconds ticker
   useEffect(() => {
@@ -84,16 +118,9 @@ export const HostDockView = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Idle interaction monitor: tuck rail after 5s, return to HUD after 3m
+  // Idle interaction monitor: return to HUD after 3m of inactivity
   const resetIdleTimers = () => {
-    setRailHidden(false);
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     if (returnToHudTimerRef.current) clearTimeout(returnToHudTimerRef.current);
-
-    idleTimerRef.current = setTimeout(() => {
-      setRailHidden(true);
-      setRailExpanded(false);
-    }, 5000);
 
     returnToHudTimerRef.current = setTimeout(() => {
       if (pagerRef.current) {
@@ -111,24 +138,47 @@ export const HostDockView = () => {
     return () => {
       window.removeEventListener('pointerdown', handleActivity);
       window.removeEventListener('pointermove', handleActivity);
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       if (returnToHudTimerRef.current) clearTimeout(returnToHudTimerRef.current);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     };
   }, []);
 
   // Scroll to page index
+  const isNavigatingRef = useRef(false);
+  const scrollTimeoutRef = useRef(null);
+
   const goToPage = (index) => {
-    if (pagerRef.current) {
-      pagerRef.current.scrollTo({
-        left: index * pagerRef.current.clientWidth,
-        behavior: 'smooth'
-      });
-      setActivePageIndex(index);
+    const pager = pagerRef.current;
+    if (!pager) return;
+
+    setActivePageIndex(index);
+    isNavigatingRef.current = true;
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+
+    // Temporarily disable scroll snap on the container to prevent Chromium from
+    // instantly snapping/flickering to the target and then bouncing back before smooth-scrolling.
+    pager.style.scrollSnapType = 'none';
+
+    pager.scrollTo({
+      left: index * pager.clientWidth,
+      behavior: 'smooth'
+    });
+
+    const restoreSnap = () => {
+      if (pagerRef.current) {
+        pagerRef.current.style.scrollSnapType = '';
+      }
+      isNavigatingRef.current = false;
+    };
+
+    if ('onscrollend' in window) {
+      pager.addEventListener('scrollend', restoreSnap, { once: true });
     }
+    scrollTimeoutRef.current = setTimeout(restoreSnap, 500);
   };
 
   const handlePagerScroll = () => {
-    if (!pagerRef.current) return;
+    if (!pagerRef.current || isNavigatingRef.current) return;
     const width = pagerRef.current.clientWidth || 1;
     const index = Math.round(pagerRef.current.scrollLeft / width);
     if (index !== activePageIndex && index >= 0 && index <= 5) {
@@ -320,7 +370,7 @@ export const HostDockView = () => {
       {/* ── LEFT NAVIGATION RAIL ────────────────────────────── */}
       <nav
         ref={railRef}
-        className={`rail ${railExpanded ? 'expanded' : ''} ${railHidden ? 'hidden' : ''}`}
+        className={`rail ${railExpanded ? 'expanded' : ''}`}
         aria-label="Pages"
         onPointerDown={handleRailPointerDown}
         onPointerUp={handleRailPointerUp}
@@ -331,7 +381,11 @@ export const HostDockView = () => {
           <i />
         </div>
 
+        {/* Traveling halo indicator wave */}
+        <div className="rail-halo" style={haloStyle} />
+
         <button
+          ref={(el) => (tabRefs.current[0] = el)}
           className={`tab ${activePageIndex === 0 ? 'on' : ''}`}
           onClick={() => goToPage(0)}
           title="HUD Overview"
@@ -346,6 +400,7 @@ export const HostDockView = () => {
         </button>
 
         <button
+          ref={(el) => (tabRefs.current[1] = el)}
           className={`tab ${activePageIndex === 1 ? 'on' : ''}`}
           onClick={() => goToPage(1)}
           title="Drift Clock"
@@ -358,6 +413,7 @@ export const HostDockView = () => {
         </button>
 
         <button
+          ref={(el) => (tabRefs.current[2] = el)}
           className={`tab ${activePageIndex === 2 ? 'on' : ''}`}
           onClick={() => goToPage(2)}
           title="Music Station"
@@ -371,6 +427,7 @@ export const HostDockView = () => {
         </button>
 
         <button
+          ref={(el) => (tabRefs.current[3] = el)}
           className={`tab ${activePageIndex === 3 ? 'on' : ''}`}
           onClick={() => goToPage(3)}
           title="Focus Objectives"
@@ -384,6 +441,7 @@ export const HostDockView = () => {
         </button>
 
         <button
+          ref={(el) => (tabRefs.current[4] = el)}
           className={`tab ${activePageIndex === 4 ? 'on' : ''}`}
           onClick={() => goToPage(4)}
           title="Alarms Center"
@@ -396,6 +454,7 @@ export const HostDockView = () => {
         </button>
 
         <button
+          ref={(el) => (tabRefs.current[5] = el)}
           className={`tab ${activePageIndex === 5 ? 'on' : ''}`}
           onClick={() => goToPage(5)}
           title="SD Storage"
@@ -534,27 +593,53 @@ export const HostDockView = () => {
               </div>
             </div>
 
-            {/* Focus & Storage Summary Card */}
-            <div className="card">
-              <h2>Focus</h2>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <div style={{ fontWeight: 600, fontSize: '17px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {focusTargetTitle || 'No active objective'}
-                </div>
-                <div className="mono" style={{ color: 'var(--amber)', fontSize: '26px', fontWeight: 700 }}>
-                  {focusTimer.formatted}
-                </div>
-              </div>
-              <div className="muted mono" style={{ fontSize: '12px', margin: '6px 0 14px' }}>
-                {fSessionsToday} sessions today · cycle {fCycle + 1}/4 · {FOCUS_LABELS[fMode]}
+            {/* Focus Summary Card */}
+            <div
+              className="card"
+              id="hudFocus"
+              onClick={() => goToPage(3)}
+              style={{
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2 style={{ margin: 0 }}>Focus</h2>
+                <span className="chip" style={{ fontSize: '11px', padding: '2px 8px', height: '22px' }}>
+                  {FOCUS_LABELS[fMode]} · {focusStatusLabel}
+                </span>
               </div>
 
-              <h2>Storage</h2>
-              <div className="mono" style={{ fontSize: '13px', marginBottom: '6px' }}>
-                {storageUsedGB} GB / {storageTotalGB} GB
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '12px' }}>
+                  <div style={{ fontWeight: 600, fontSize: '17px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                    {focusTargetTitle || 'General Focus Session'}
+                  </div>
+                  <div className="mono" style={{ color: 'var(--amber)', fontSize: '26px', fontWeight: 700, flexShrink: 0 }}>
+                    {focusTimer.formatted}
+                  </div>
+                </div>
+
+                <div className="bar" style={{ margin: '8px 0 0' }}>
+                  <div style={{ width: `${focusTimer.progress}%` }} />
+                </div>
               </div>
-              <div className="bar">
-                <div style={{ width: `${storagePercent}%` }} />
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                <div className="dots" style={{ marginBottom: 0, gap: '6px' }}>
+                  {[0, 1, 2, 3].map(dotIndex => (
+                    <i
+                      key={dotIndex}
+                      style={{ width: '10px', height: '10px' }}
+                      className={dotIndex < fCycle ? 'f' : (dotIndex === fCycle && fMode === 'focus' && (fRunning || fPaused) ? 'a' : '')}
+                    />
+                  ))}
+                </div>
+                <div className="muted mono" style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>
+                  {fSessionsToday} sessions today · cycle {fCycle + 1}/4
+                </div>
               </div>
             </div>
           </div>
@@ -891,9 +976,6 @@ export const HostDockView = () => {
                       </button>
                     ))}
                   </div>
-                </div>
-                <div className="ftarget">
-                  {focusTargetTitle || 'General Focus Session'}
                 </div>
 
                 <div className="timer">{focusTimer.formatted}</div>
